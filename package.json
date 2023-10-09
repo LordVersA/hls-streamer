@@ -1,0 +1,31 @@
+{
+  "name": "hls-streamer",
+  "version": "1.0.0",
+  "description": "Media HLS streamer on demand",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "rm -rf dist/ && npm run build:esm && npm run build:cjs",
+    "build:esm": "tsc",
+    "build:cjs": "tsc --module CommonJS --outDir dist/cjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LordVersA/hls-streamer.git"
+  },
+  "keywords": [
+    "hls",
+    "streamer"
+  ],
+  "author": "LordVersA",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/LordVersA/hls-streamer/issues"
+  },
+  "homepage": "https://github.com/LordVersA/hls-streamer#readme",
+  "devDependencies": {
+    "@types/node": "^20.8.3"
+  },
+  "dependencies": {
+    "mp3-duration": "^1.1.0"
+  }
+}
