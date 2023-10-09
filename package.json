@@ -1,6 +1,6 @@
 {
   "name": "hls-streamer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Media HLS streamer on demand",
   "main": "dist/index.js",
   "scripts": {
