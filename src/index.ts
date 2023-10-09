@@ -1,20 +1,35 @@
 import fs from "node:fs";
-import { FileLib } from "./Libs/FileLib";
 import { HlsStreamerOption } from "./Interfaces/HlsStreamer";
+import { FileLib } from "./Libs/FileLib";
 
 export class HlsStreamer {
   filePath: string;
-  eachSegmentSize: number;
+  size: number = 0;
+  segmentSize: number;
+  audioBuffer: Buffer = Buffer.alloc(0);
   fileName: string;
   basePath: string;
   lessSizeForFirst2Segments: boolean;
 
   constructor(options: HlsStreamerOption) {
     this.filePath = options.filePath;
-    this.eachSegmentSize = options.eachSegmentSize ?? 512;
+    this.segmentSize = (options.eachSegmentSize ?? 512) * 1024;
     this.fileName = options.fileName ?? "file";
     this.basePath = options.basePath ?? "";
     this.lessSizeForFirst2Segments = options.lessSizeForFirst2Segments ?? false;
+  }
+
+  loadBuffer() {
+    this.audioBuffer = fs.readFileSync(this.filePath)!;
+    this.size = FileLib.getFileSizeInBytes(this.audioBuffer)!;
+
+    if (
+      this.size <= 0 ||
+      this.audioBuffer.length <= 0 ||
+      this.segmentSize > this.size
+    ) {
+      throw new Error("Error on file size");
+    }
   }
 
   async getFileBuffer(startByte: number, endByte: number): Promise<Buffer> {
@@ -41,10 +56,11 @@ export class HlsStreamer {
   }
 
   async createM3U8() {
-    const audioBuffer = fs.readFileSync(this.filePath);
-    const size = FileLib.getFileSizeInBytes(audioBuffer);
-    const segmentSize = 1024 * this.eachSegmentSize;
-    const parts = Math.ceil(size / segmentSize); // Use Math.ceil to ensure all data is processed
+    this.loadBuffer();
+    const parts =
+      Math.ceil(
+        (this.size - this.calculatefirst2SegmentSize()) / this.segmentSize
+      ) + 2;
 
     const m3u8 = [
       `#EXTM3U`,
@@ -53,16 +69,10 @@ export class HlsStreamer {
       `#EXT-X-TARGETDURATION:14`,
       `#EXT-X-MEDIA-SEQUENCE:0`,
     ];
-
-    // Pre-calculate segment durations
     const segmentInfo = await Promise.all(
       Array.from({ length: parts }).map(async (_, i) => {
-        let start = this.calculateSegmentSize(i, segmentSize) * i;
-        const end = Math.min(
-          start + this.calculateSegmentSize(i + 1, segmentSize),
-          size
-        );
-        const segmentData = audioBuffer.subarray(start, end);
+        const { start, end } = this.calculateSegment(i);
+        const segmentData = this.audioBuffer.subarray(start, end);
         const segmentDuration = await FileLib.getMP3DurationFromBuffer(
           segmentData
         );
@@ -71,7 +81,11 @@ export class HlsStreamer {
           end,
           segmentDuration,
         };
-        // start = end;
+        // console.log(
+        //   `Start: \x1b[31m${start.toLocaleString()}\x1b[0m End: \x1b[32m${end.toLocaleString()}\x1b[0m Len: \x1b[34m${(
+        //     end - start
+        //   ).toLocaleString()}\x1b[0m`
+        // );
 
         return entry;
       })
@@ -89,20 +103,33 @@ export class HlsStreamer {
     return m3u8.join("\n");
   }
 
-  private calculateSegmentSize(step: number, segmentSize: number) {
+  private calculateSegmentSize(step: number) {
     if (!this.lessSizeForFirst2Segments) {
-      return segmentSize;
+      return this.segmentSize;
     }
     switch (step) {
-      case 0:
-        return 0;
       case 1:
-        return segmentSize / 4;
+        return this.segmentSize / 4;
       case 2:
-        return segmentSize / 2;
+        return this.segmentSize / 2;
       default:
-        return segmentSize;
+        return this.segmentSize;
     }
+  }
+
+  private calculateSegment(i: number) {
+    let start = 0;
+    if (i < 2) {
+      start = i * (this.segmentSize / 4);
+    } else {
+      start = (3 * this.segmentSize) / 4 + (i - 2) * this.segmentSize;
+    }
+    const end = Math.min(start + this.calculateSegmentSize(i + 1), this.size);
+    return { end, start };
+  }
+
+  private calculatefirst2SegmentSize() {
+    return (this.segmentSize / 4) * 3;
   }
 
   private lpad(value: number, padding: number) {
