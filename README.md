@@ -4,6 +4,8 @@
 
 The `hls-streamer` npm package allows you to create and stream HLS (HTTP Live Streaming) from an MP3 file on demand, without the need to store any temporary files or use `ffmpeg`.
 
+Npm: https://www.npmjs.com/package/hls-streamer
+
 ## Installation
 
 You can install this package using Yarn or npm:
@@ -28,11 +30,11 @@ const hls = new HlsStreamer({
 ```
 ## Options
 
-`filePath`: The path to the MP3 file you want to stream.
-`segmentSize`: The size of each segment in bytes (default is 512 KB).
-`fileName`: The base name for the segments (default is "file").
-`basePath`: The base path where segments will be stored.
-`lessSizeForFirst2Segments`: Whether to reduce the size of the first 2 segments (default is false).
+- `filePath`: The path to the MP3 file you want to stream.
+- `segmentSize`: The size of each segment in bytes (default is 512 KB).
+- `fileName`: The base name for the segments (default is "file").
+- `basePath`: The base path where segments will be stored.
+- `lessSizeForFirst2Segments`: Whether to reduce the size of the first 2 segments (default is false).
 
 You can send the M3U8 file with Express like this:
 
