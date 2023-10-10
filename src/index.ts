@@ -12,6 +12,9 @@ export class HlsStreamer {
   lessSizeForFirst2Segments: boolean;
 
   constructor(options: HlsStreamerOption) {
+    if (!fs.existsSync(options.filePath)) {
+      throw new Error("File not exists");
+    }
     this.filePath = options.filePath;
     this.segmentSize = (options.eachSegmentSize ?? 512) * 1024;
     this.fileName = options.fileName ?? "file";
