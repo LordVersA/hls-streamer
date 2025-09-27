@@ -2,9 +2,6 @@
 node_modules/
 yarn.lock
 
-# Build outputs
-dist/
-
 # Test coverage
 coverage/
 
