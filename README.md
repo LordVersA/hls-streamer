@@ -1,72 +1,237 @@
-# hls-streamer
+# HLS Streamer
 
-## Description
+[![npm version](https://badge.fury.io/js/hls-streamer.svg)](https://badge.fury.io/js/hls-streamer)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![TypeScript](https://img.shields.io/badge/%3C%2F%3E-TypeScript-%230074c1.svg)](http://www.typescriptlang.org/)
 
-The `hls-streamer` npm package allows you to create and stream HLS (HTTP Live Streaming) from an MP3 file on demand, without the need to store any temporary files or use `ffmpeg`.
+**HLS Streamer** is a lightweight npm package that creates and streams HLS (HTTP Live Streaming) from MP3 files on demand, without storing temporary files or requiring ffmpeg.
 
-Npm: https://www.npmjs.com/package/hls-streamer
+## ✨ Features
 
-## Installation
+- 🚀 **Zero Dependencies** - No ffmpeg required
+- 💾 **No Temporary Files** - Stream directly from source
+- ⚡ **Fast Startup** - Optional smaller initial segments for quick playback start
+- 🎯 **TypeScript Support** - Full type definitions included
+- 🔧 **Configurable** - Customizable segment sizes and naming
+- 📱 **Memory Efficient** - Byte-range streaming with minimal memory footprint
 
-You can install this package using Yarn or npm:
+## 📦 Installation
 
 ```bash
 npm install hls-streamer
-# or
+```
+
+```bash
 yarn add hls-streamer
 ```
 
+```bash
+pnpm add hls-streamer
+```
 
-## Usage
-To use hls-streamer, you can create an instance of HlsStreamer with the following options:
+## 🚀 Quick Start
 
+### Basic Usage
 
-```js
+```typescript
+import { HlsStreamer } from 'hls-streamer';
+
 const hls = new HlsStreamer({
-  filePath: `file.mp3`,
-  lessSizeForFirst2Segments: true,
-  basePath: `segments/<token>`,
+  filePath: 'path/to/audio.mp3',
+  segmentSizeKB: 512,
+  fileName: 'segment',
+  baseUrl: 'segments/session-123',
+  enableFastStart: true
 });
-```
-## Options
 
-- `filePath`: The path to the MP3 file you want to stream.
-- `segmentSize`: The size of each segment in bytes (default is 512 KB).
-- `fileName`: The base name for the segments (default is "file").
-- `basePath`: The base path where segments will be stored.
-- `lessSizeForFirst2Segments`: Whether to reduce the size of the first 2 segments (default is false).
+// Generate M3U8 playlist
+const playlist = await hls.createM3U8();
 
-You can send the M3U8 file with Express like this:
-
-```js
-res.send(await hls.createM3U8());
+// Get file buffer for specific byte range
+const buffer = await hls.getFileBuffer(startByte, endByte);
 ```
 
-To get a specific range of bytes from the file, you can use the following function:
+### Express.js Integration
 
-```js
-await hls.getFileBuffer(+req.params.start, +req.params.end);
-```
+```typescript
+import express from 'express';
+import { HlsStreamer } from 'hls-streamer';
 
-Make sure to set up your Express routes accordingly:
+const app = express();
 
-```js
-app.get("/segments/:token/:quality/:start/:end/:any.mp3", async (req, res) => {
-  // Create a new HlsStreamer instance with appropriate options
+// Serve M3U8 playlist
+app.get('/stream/:sessionId/playlist.m3u8', async (req, res) => {
   const hls = new HlsStreamer({
-    filePath: `file.mp3`,
-    lessSizeForFirst2Segments: true,
-    basePath: `segments/<token>`,
+    filePath: getFilePath(req.params.sessionId),
+    baseUrl: `stream/${req.params.sessionId}`,
+    enableFastStart: true
   });
 
-  // Send the requested file buffer
-  res.setHeader("Content-Type", "application/octet-stream");
-  res.send(await hls.getFileBuffer(+req.params.start, +req.params.end));
+  res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+  res.send(await hls.createM3U8());
+});
+
+// Serve segment files
+app.get('/stream/:sessionId/:start/:end/:filename', async (req, res) => {
+  const hls = new HlsStreamer({
+    filePath: getFilePath(req.params.sessionId),
+    baseUrl: `stream/${req.params.sessionId}`
+  });
+
+  const start = parseInt(req.params.start);
+  const end = parseInt(req.params.end);
+
+  res.setHeader('Content-Type', 'audio/mpeg');
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.send(await hls.getFileBuffer(start, end));
 });
 ```
 
-## License
-This package is open-source and free to use in any project. There are no specific licensing restrictions.
+## 🛠️ API Reference
 
-## Issues
-If you encounter any issues or have questions, please feel free to open an issue on GitHub.
+### HlsStreamer
+
+#### Constructor Options
+
+```typescript
+interface HlsStreamerOptions {
+  /** Path to the MP3 file */
+  filePath: string;
+  /** Segment size in KB (default: 512) */
+  segmentSizeKB?: number;
+  /** Base filename for segments (default: "file") */
+  fileName?: string;
+  /** Base URL path for segment URLs */
+  baseUrl?: string;
+  /** Enable smaller initial segments for faster startup */
+  enableFastStart?: boolean;
+}
+```
+
+#### Methods
+
+##### `createM3U8(): Promise<string>`
+Generates an HLS M3U8 playlist file content.
+
+**Returns:** M3U8 playlist as a string
+
+##### `getFileBuffer(startByte: number, endByte: number): Promise<Buffer>`
+Retrieves a specific byte range from the MP3 file.
+
+**Parameters:**
+- `startByte` - Starting byte position (inclusive)
+- `endByte` - Ending byte position (exclusive)
+
+**Returns:** Buffer containing the requested byte range
+
+##### `getSegmentDuration(segmentIndex: number): Promise<number>`
+Gets the accurate duration of a specific segment.
+
+**Parameters:**
+- `segmentIndex` - Zero-based segment index
+
+**Returns:** Duration in seconds
+
+### Error Handling
+
+The package includes custom error types for better error handling:
+
+```typescript
+import {
+  FileNotFoundError,
+  InvalidFileError,
+  InvalidRangeError,
+  InvalidParameterError
+} from 'hls-streamer';
+
+try {
+  const hls = new HlsStreamer({ filePath: 'nonexistent.mp3' });
+} catch (error) {
+  if (error instanceof FileNotFoundError) {
+    console.error('File not found:', error.message);
+  }
+}
+```
+
+## 📋 Configuration Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `filePath` | `string` | **required** | Path to the MP3 file |
+| `segmentSizeKB` | `number` | `512` | Size of each segment in KB |
+| `fileName` | `string` | `"file"` | Base name for segment files |
+| `baseUrl` | `string` | `""` | Base URL path for segment URLs |
+| `enableFastStart` | `boolean` | `false` | Use smaller initial segments for faster startup |
+
+## 🎯 Use Cases
+
+- **Audio Streaming Services** - Stream music without pre-processing
+- **Podcast Platforms** - On-demand episode streaming
+- **Educational Platforms** - Stream lecture recordings
+- **Voice Message Systems** - Real-time audio message playback
+- **Audio Books** - Chapter-based streaming
+
+## 🔧 Advanced Examples
+
+### Custom Segment Sizing
+
+```typescript
+const hls = new HlsStreamer({
+  filePath: 'large-audio-file.mp3',
+  segmentSizeKB: 1024, // 1MB segments for better quality
+  enableFastStart: true // First segments will be 256KB and 512KB
+});
+```
+
+### Dynamic File Paths
+
+```typescript
+class AudioStreamer {
+  async streamAudio(userId: string, audioId: string) {
+    const filePath = await this.getAudioPath(userId, audioId);
+
+    const hls = new HlsStreamer({
+      filePath,
+      baseUrl: `audio/${userId}/${audioId}`,
+      fileName: `audio-${audioId}`,
+      segmentSizeKB: 256 // Smaller segments for mobile
+    });
+
+    return hls.createM3U8();
+  }
+}
+```
+
+## 🧪 Testing
+
+```bash
+npm test
+npm run test:watch
+npm run test:coverage
+```
+
+## 🏗️ Building
+
+```bash
+npm run build        # Build both ESM and CJS
+npm run build:esm    # Build ES modules
+npm run build:cjs    # Build CommonJS
+```
+
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) file for details.
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
+
+## 📞 Support
+
+- 🐛 **Bug Reports:** [GitHub Issues](https://github.com/LordVersA/hls-streamer/issues)
+- 💬 **Questions:** [GitHub Discussions](https://github.com/LordVersA/hls-streamer/discussions)
+- 📦 **NPM:** [hls-streamer](https://www.npmjs.com/package/hls-streamer)
+
+---
+
+Made with ❤️ by [LordVersA](https://github.com/LordVersA)
