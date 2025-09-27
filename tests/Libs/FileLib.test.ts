@@ -1,23 +1,6 @@
 import { FileLib } from '../../src/Libs/FileLib';
 import { MockMP3 } from '../fixtures/mock-mp3';
 
-// Mock the mp3-duration module
-jest.mock('mp3-duration', () => {
-  return jest.fn((buffer: Buffer, callback: (err: Error | null, duration: number) => void) => {
-    // Simulate realistic duration based on buffer size
-    // Assume ~128kbps MP3: 16000 bytes per second
-    const estimatedDuration = buffer.length / 16000;
-
-    // Add some randomness but keep it deterministic for testing
-    const duration = Math.max(0.1, estimatedDuration);
-
-    // Simulate async behavior
-    setTimeout(() => {
-      callback(null, duration);
-    }, 10);
-  });
-});
-
 describe('FileLib', () => {
   describe('getFileSizeInBytes', () => {
     it('should return correct size for buffer', () => {
@@ -95,7 +78,7 @@ describe('FileLib', () => {
       const duration = await FileLib.getMP3DurationFromBuffer(buffer);
 
       expect(typeof duration).toBe('number');
-      expect(duration).toBeGreaterThanOrEqual(0);
+      expect(duration).toBe(0);
     });
 
     it('should handle buffer with minimum size', async () => {
@@ -108,38 +91,20 @@ describe('FileLib', () => {
   });
 
   describe('getMP3DurationFromBuffer error handling', () => {
-    beforeEach(() => {
-      // Reset the mock to simulate errors
-      jest.clearAllMocks();
-    });
-
-    it('should reject promise when mp3-duration returns error', async () => {
-      // Mock mp3-duration to return an error
-      const mp3Duration = require('mp3-duration');
-      mp3Duration.mockImplementation((_buffer: Buffer, callback: (err: Error | null, duration: number) => void) => {
-        setTimeout(() => {
-          callback(new Error('Invalid MP3 format'), 0);
-        }, 10);
-      });
-
+    it('should handle invalid MP3 data gracefully', async () => {
       const buffer = Buffer.from('invalid mp3 data');
+      const duration = await FileLib.getMP3DurationFromBuffer(buffer);
 
-      await expect(FileLib.getMP3DurationFromBuffer(buffer)).rejects.toThrow('Invalid MP3 format');
+      expect(typeof duration).toBe('number');
+      expect(duration).toBeGreaterThan(0); // Should fallback to estimation
     });
 
-    it('should handle null error correctly', async () => {
-      // Mock mp3-duration to return success with null error
-      const mp3Duration = require('mp3-duration');
-      mp3Duration.mockImplementation((_buffer: Buffer, callback: (err: Error | null, duration: number) => void) => {
-        setTimeout(() => {
-          callback(null, 3.5);
-        }, 10);
-      });
-
+    it('should parse valid mock MP3 buffer', async () => {
       const buffer = MockMP3.createMockMP3Buffer(1024);
       const duration = await FileLib.getMP3DurationFromBuffer(buffer);
 
-      expect(duration).toBe(3.5);
+      expect(typeof duration).toBe('number');
+      expect(duration).toBeGreaterThan(0);
     });
   });
 });

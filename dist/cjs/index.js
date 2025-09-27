@@ -66,6 +66,12 @@ class HlsStreamer {
             writable: true,
             value: new Map()
         });
+        Object.defineProperty(this, "frameAlignedSegments", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: new Map()
+        });
         this.validateOptions(options);
         this.validateFile(options.filePath);
         this.filePath = options.filePath;
@@ -124,11 +130,26 @@ class HlsStreamer {
         if (endByte > fileInfo.size) {
             throw new HlsStreamerErrors_1.InvalidRangeError(startByte, endByte);
         }
-        const bufferLength = endByte - startByte;
+        const searchBufferSize = Math.min(8192, fileInfo.size);
+        const searchStartByte = Math.max(0, startByte - 1024);
+        const searchEndByte = Math.min(fileInfo.size, startByte + searchBufferSize);
         const fd = node_fs_1.default.openSync(this.filePath, "r");
         try {
+            const searchBuffer = Buffer.alloc(searchEndByte - searchStartByte);
+            node_fs_1.default.readSync(fd, searchBuffer, 0, searchBuffer.length, searchStartByte);
+            const targetOffsetInSearch = startByte - searchStartByte;
+            const frameAlignedOffsetInSearch = this.findNextMp3Frame(searchBuffer, Math.max(0, targetOffsetInSearch));
+            const actualStartByte = searchStartByte + frameAlignedOffsetInSearch;
+            const actualEndByte = Math.min(endByte, fileInfo.size);
+            const bufferLength = actualEndByte - actualStartByte;
+            if (bufferLength <= 0) {
+                const fallbackLength = endByte - startByte;
+                const fallbackBuffer = Buffer.alloc(fallbackLength);
+                const bytesRead = node_fs_1.default.readSync(fd, fallbackBuffer, 0, fallbackLength, startByte);
+                return fallbackBuffer.subarray(0, bytesRead);
+            }
             const buffer = Buffer.alloc(bufferLength);
-            const bytesRead = node_fs_1.default.readSync(fd, buffer, 0, bufferLength, startByte);
+            const bytesRead = node_fs_1.default.readSync(fd, buffer, 0, bufferLength, actualStartByte);
             return buffer.subarray(0, bytesRead);
         }
         finally {
@@ -146,7 +167,7 @@ class HlsStreamer {
             '#EXT-X-MEDIA-SEQUENCE:0',
         ];
         for (let i = 0; i < segmentCount; i++) {
-            const { start, end } = this.calculateSegment(i, fileInfo.size);
+            const { start, end } = await this.getFrameAlignedSegment(i, fileInfo.size);
             const estimatedDuration = this.estimateSegmentDuration(end - start);
             const segmentUrl = this.buildSegmentUrl(start, end, i);
             m3u8.push(`#EXTINF:${estimatedDuration.toFixed(3)}`);
@@ -198,6 +219,58 @@ class HlsStreamer {
         const segmentSize = this.calculateSegmentSize(segmentIndex);
         const end = Math.min(start + segmentSize, fileSize);
         return { start: Math.floor(start), end: Math.floor(end) };
+    }
+    async getFrameAlignedSegment(segmentIndex, fileSize) {
+        if (this.frameAlignedSegments.has(segmentIndex)) {
+            return this.frameAlignedSegments.get(segmentIndex);
+        }
+        const rawSegment = this.calculateSegment(segmentIndex, fileSize);
+        if (segmentIndex === 0) {
+            const fd = node_fs_1.default.openSync(this.filePath, "r");
+            try {
+                const headerBuffer = Buffer.alloc(Math.min(8192, fileSize));
+                node_fs_1.default.readSync(fd, headerBuffer, 0, headerBuffer.length, 0);
+                const frameStart = this.findNextMp3Frame(headerBuffer, 0);
+                const alignedSegment = { start: frameStart, end: rawSegment.end };
+                this.frameAlignedSegments.set(segmentIndex, alignedSegment);
+                return alignedSegment;
+            }
+            finally {
+                node_fs_1.default.closeSync(fd);
+            }
+        }
+        this.frameAlignedSegments.set(segmentIndex, rawSegment);
+        return rawSegment;
+    }
+    findNextMp3Frame(buffer, startPos) {
+        let pos = startPos;
+        if (pos === 0 && buffer.length > 10 && buffer.toString('ascii', 0, 3) === 'ID3') {
+            const tagSize = ((buffer[6] & 0x7f) << 21) |
+                ((buffer[7] & 0x7f) << 14) |
+                ((buffer[8] & 0x7f) << 7) |
+                (buffer[9] & 0x7f);
+            pos = 10 + tagSize;
+        }
+        while (pos < buffer.length - 1) {
+            if (buffer[pos] === 0xFF && (buffer[pos + 1] & 0xE0) === 0xE0) {
+                if (pos + 3 < buffer.length) {
+                    const header = (buffer[pos] << 24) |
+                        (buffer[pos + 1] << 16) |
+                        (buffer[pos + 2] << 8) |
+                        buffer[pos + 3];
+                    const version = (header >> 19) & 0x3;
+                    const layer = (header >> 17) & 0x3;
+                    const bitrateIndex = (header >> 12) & 0xF;
+                    const sampleRateIndex = (header >> 10) & 0x3;
+                    if (version !== 1 && layer !== 0 && bitrateIndex !== 0 &&
+                        bitrateIndex !== 15 && sampleRateIndex !== 3) {
+                        return pos;
+                    }
+                }
+            }
+            pos++;
+        }
+        return startPos;
     }
     calculatefirst2SegmentSize() {
         return (this.segmentSize / 4) * 3;

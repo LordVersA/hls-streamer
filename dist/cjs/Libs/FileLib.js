@@ -1,10 +1,6 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.FileLib = void 0;
-const mp3_duration_1 = __importDefault(require("mp3-duration"));
 class FileLib {
     static getFileSizeInBytes(buffer) {
         if (Buffer.isBuffer(buffer)) {
@@ -16,15 +12,120 @@ class FileLib {
     }
     static getMP3DurationFromBuffer(mp3Buffer) {
         return new Promise((resolve, reject) => {
-            (0, mp3_duration_1.default)(mp3Buffer, (err, duration) => {
-                if (err) {
-                    reject(err);
+            try {
+                const duration = this.parseMP3Duration(mp3Buffer);
+                resolve(duration);
+            }
+            catch (error) {
+                reject(error);
+            }
+        });
+    }
+    static parseMP3Duration(buffer) {
+        if (buffer.length === 0) {
+            return 0;
+        }
+        const bitrates = [
+            [0, 0, 0, 0, 0],
+            [32, 32, 32, 32, 8],
+            [64, 48, 40, 48, 16],
+            [96, 56, 48, 56, 24],
+            [128, 64, 56, 64, 32],
+            [160, 80, 64, 80, 40],
+            [192, 96, 80, 96, 48],
+            [224, 112, 96, 112, 56],
+            [256, 128, 112, 128, 64],
+            [288, 160, 128, 144, 80],
+            [320, 192, 160, 160, 96],
+            [352, 224, 192, 176, 112],
+            [384, 256, 224, 192, 128],
+            [416, 320, 256, 224, 144],
+            [448, 384, 320, 256, 160]
+        ];
+        const sampleRates = [
+            [44100, 22050, 11025],
+            [48000, 24000, 12000],
+            [32000, 16000, 8000]
+        ];
+        let offset = 0;
+        let totalFrames = 0;
+        let sampleRate = 0;
+        let samplesPerFrame = 0;
+        if (buffer.length > 10 && buffer.toString('ascii', 0, 3) === 'ID3') {
+            const tagSize = ((buffer[6] & 0x7f) << 21) |
+                ((buffer[7] & 0x7f) << 14) |
+                ((buffer[8] & 0x7f) << 7) |
+                (buffer[9] & 0x7f);
+            offset = 10 + tagSize;
+        }
+        while (offset < buffer.length - 3) {
+            if ((buffer[offset] === 0xFF) && ((buffer[offset + 1] & 0xE0) === 0xE0)) {
+                if (offset + 3 >= buffer.length)
+                    break;
+                const header = (buffer[offset] << 24) |
+                    (buffer[offset + 1] << 16) |
+                    (buffer[offset + 2] << 8) |
+                    buffer[offset + 3];
+                const version = (header >> 19) & 0x3;
+                const layer = (header >> 17) & 0x3;
+                const bitrateIndex = (header >> 12) & 0xF;
+                const sampleRateIndex = (header >> 10) & 0x3;
+                const padding = (header >> 9) & 0x1;
+                if (version === 1 || layer === 0 || bitrateIndex === 0 || bitrateIndex === 15 || sampleRateIndex === 3) {
+                    offset++;
+                    continue;
+                }
+                const versionIndex = version === 3 ? 0 : (version === 2 ? 1 : 2);
+                const layerIndex = layer === 3 ? 0 : (layer === 2 ? 1 : 2);
+                const bitrate = bitrates[bitrateIndex]?.[versionIndex === 0 ? layerIndex : (layerIndex === 0 ? 3 : 4)];
+                const foundSampleRate = sampleRates[sampleRateIndex]?.[versionIndex];
+                if (!bitrate || !foundSampleRate) {
+                    offset++;
+                    continue;
+                }
+                if (totalFrames === 0) {
+                    sampleRate = foundSampleRate;
+                    if (layer === 3) {
+                        samplesPerFrame = 384;
+                    }
+                    else if (layer === 2) {
+                        samplesPerFrame = 1152;
+                    }
+                    else {
+                        samplesPerFrame = version === 3 ? 1152 : 576;
+                    }
+                }
+                let frameLength;
+                if (layer === 3) {
+                    frameLength = Math.floor((12 * bitrate * 1000 / foundSampleRate + padding) * 4);
                 }
                 else {
-                    resolve(duration);
+                    frameLength = Math.floor(144 * bitrate * 1000 / foundSampleRate + padding);
                 }
-            });
-        });
+                if (frameLength <= 0) {
+                    offset++;
+                    continue;
+                }
+                totalFrames++;
+                if (offset + frameLength > buffer.length) {
+                    const remainingBytes = buffer.length - offset;
+                    const avgFrameLength = offset > 0 ? offset / totalFrames : frameLength;
+                    const estimatedRemainingFrames = Math.floor(remainingBytes / avgFrameLength);
+                    totalFrames += estimatedRemainingFrames;
+                    break;
+                }
+                offset += frameLength;
+            }
+            else {
+                offset++;
+            }
+        }
+        if (totalFrames === 0 || !sampleRate || !samplesPerFrame) {
+            const estimatedDuration = buffer.length / 16000;
+            return Math.max(0.001, estimatedDuration);
+        }
+        const duration = (totalFrames * samplesPerFrame) / sampleRate;
+        return Math.max(0.001, duration);
     }
 }
 exports.FileLib = FileLib;

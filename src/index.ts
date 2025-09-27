@@ -20,6 +20,7 @@ export class HlsStreamer {
   private readonly enableFastStart: boolean;
   private fileInfo?: Mp3FileInfo;
   private segmentCache = new Map<number, SegmentInfo>();
+  private frameAlignedSegments = new Map<number, { start: number; end: number }>();
 
   /**
    * Initialize HLS streamer with MP3 file and configuration
@@ -103,12 +104,38 @@ export class HlsStreamer {
       throw new InvalidRangeError(startByte, endByte);
     }
 
-    const bufferLength = endByte - startByte;
+    // For frame alignment, we need to read a bit more to find the proper start position
+    const searchBufferSize = Math.min(8192, fileInfo.size); // Read up to 8KB to find frame boundary
+    const searchStartByte = Math.max(0, startByte - 1024); // Start searching a bit before the target
+    const searchEndByte = Math.min(fileInfo.size, startByte + searchBufferSize);
+
     const fd = fs.openSync(this.filePath, "r");
 
     try {
+      // Read a search buffer to find the frame boundary
+      const searchBuffer = Buffer.alloc(searchEndByte - searchStartByte);
+      fs.readSync(fd, searchBuffer as any, 0, searchBuffer.length, searchStartByte);
+
+      // Find the actual frame-aligned start position
+      const targetOffsetInSearch = startByte - searchStartByte;
+      const frameAlignedOffsetInSearch = this.findNextMp3Frame(searchBuffer, Math.max(0, targetOffsetInSearch));
+      const actualStartByte = searchStartByte + frameAlignedOffsetInSearch;
+
+      // Ensure we don't go beyond the requested end
+      const actualEndByte = Math.min(endByte, fileInfo.size);
+      const bufferLength = actualEndByte - actualStartByte;
+
+      if (bufferLength <= 0) {
+        // Fallback to original range if frame alignment fails
+        const fallbackLength = endByte - startByte;
+        const fallbackBuffer = Buffer.alloc(fallbackLength);
+        const bytesRead = fs.readSync(fd, fallbackBuffer as any, 0, fallbackLength, startByte);
+        return fallbackBuffer.subarray(0, bytesRead);
+      }
+
+      // Read the frame-aligned segment
       const buffer = Buffer.alloc(bufferLength);
-      const bytesRead = fs.readSync(fd, buffer as any, 0, bufferLength, startByte);
+      const bytesRead = fs.readSync(fd, buffer as any, 0, bufferLength, actualStartByte);
       return buffer.subarray(0, bytesRead);
     } finally {
       fs.closeSync(fd);
@@ -130,9 +157,9 @@ export class HlsStreamer {
       '#EXT-X-MEDIA-SEQUENCE:0',
     ];
 
-    // Generate segment entries without calculating durations upfront
+    // Generate segment entries with frame-aligned boundaries
     for (let i = 0; i < segmentCount; i++) {
-      const { start, end } = this.calculateSegment(i, fileInfo.size);
+      const { start, end } = await this.getFrameAlignedSegment(i, fileInfo.size);
 
       // Use estimated duration for now (can be made more accurate later)
       const estimatedDuration = this.estimateSegmentDuration(end - start);
@@ -203,6 +230,80 @@ export class HlsStreamer {
     const end = Math.min(start + segmentSize, fileSize);
 
     return { start: Math.floor(start), end: Math.floor(end) };
+  }
+
+  /**
+   * Get or calculate frame-aligned segment boundaries
+   */
+  private async getFrameAlignedSegment(segmentIndex: number, fileSize: number): Promise<{ start: number; end: number }> {
+    if (this.frameAlignedSegments.has(segmentIndex)) {
+      return this.frameAlignedSegments.get(segmentIndex)!;
+    }
+
+    // Calculate initial segment boundaries
+    const rawSegment = this.calculateSegment(segmentIndex, fileSize);
+
+    // For the first segment, always start from the beginning of the first frame
+    if (segmentIndex === 0) {
+      const fd = fs.openSync(this.filePath, "r");
+      try {
+        const headerBuffer = Buffer.alloc(Math.min(8192, fileSize));
+        fs.readSync(fd, headerBuffer as any, 0, headerBuffer.length, 0);
+        const frameStart = this.findNextMp3Frame(headerBuffer, 0);
+        const alignedSegment = { start: frameStart, end: rawSegment.end };
+        this.frameAlignedSegments.set(segmentIndex, alignedSegment);
+        return alignedSegment;
+      } finally {
+        fs.closeSync(fd);
+      }
+    }
+
+    // For other segments, use the raw calculation (frame alignment will be handled in getFileBuffer)
+    this.frameAlignedSegments.set(segmentIndex, rawSegment);
+    return rawSegment;
+  }
+
+  /**
+   * Find the next MP3 frame sync starting from the given position
+   */
+  private findNextMp3Frame(buffer: Buffer, startPos: number): number {
+    // Skip ID3v2 tag if we're at the beginning
+    let pos = startPos;
+    if (pos === 0 && buffer.length > 10 && buffer.toString('ascii', 0, 3) === 'ID3') {
+      const tagSize = ((buffer[6]! & 0x7f) << 21) |
+                     ((buffer[7]! & 0x7f) << 14) |
+                     ((buffer[8]! & 0x7f) << 7) |
+                     (buffer[9]! & 0x7f);
+      pos = 10 + tagSize;
+    }
+
+    // Look for MP3 frame sync (0xFF followed by 0xE0-0xFF)
+    while (pos < buffer.length - 1) {
+      if (buffer[pos] === 0xFF && (buffer[pos + 1]! & 0xE0) === 0xE0) {
+        // Found potential frame sync, validate it's a real MP3 header
+        if (pos + 3 < buffer.length) {
+          const header = (buffer[pos]! << 24) |
+                        (buffer[pos + 1]! << 16) |
+                        (buffer[pos + 2]! << 8) |
+                        buffer[pos + 3]!;
+
+          const version = (header >> 19) & 0x3;
+          const layer = (header >> 17) & 0x3;
+          const bitrateIndex = (header >> 12) & 0xF;
+          const sampleRateIndex = (header >> 10) & 0x3;
+
+          // Validate header fields
+          if (version !== 1 && layer !== 0 && bitrateIndex !== 0 &&
+              bitrateIndex !== 15 && sampleRateIndex !== 3) {
+            return pos;
+          }
+        }
+      }
+      pos++;
+    }
+
+    // If no frame found, return the original position
+    return startPos;
   }
 
   private calculatefirst2SegmentSize(): number {

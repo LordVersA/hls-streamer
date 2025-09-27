@@ -8,7 +8,9 @@
 
 ## ✨ Features
 
-- 🚀 **Zero Dependencies** - No ffmpeg required
+- 🚀 **True Zero Dependencies** - No external dependencies, no ffmpeg, no native binaries
+- 🎵 **Built-in MP3 Parser** - Custom MP3 duration parsing without external libraries
+- 🔄 **Frame-Aligned Segments** - Ensures all MP3 segments start at valid frame boundaries for seamless playback
 - 💾 **No Temporary Files** - Stream directly from source
 - ⚡ **Fast Startup** - Optional smaller initial segments for quick playback start
 - 🎯 **TypeScript Support** - Full type definitions included
@@ -28,6 +30,23 @@ yarn add hls-streamer
 ```bash
 pnpm add hls-streamer
 ```
+
+## 🎯 Zero Dependencies
+
+This package is **truly zero-dependency**, meaning:
+
+- ✅ **No ffmpeg** - No external binary dependencies
+- ✅ **No native modules** - Pure JavaScript/TypeScript implementation
+- ✅ **No runtime dependencies** - Check `package.json` - completely empty dependencies
+- ✅ **Custom MP3 parser** - Built-in MP3 header parsing and duration calculation
+- ✅ **Frame-perfect segmentation** - MP3 segments start at valid frame boundaries
+- ✅ **Cross-platform** - Works on any platform that supports Node.js
+
+Perfect for:
+- 🐳 **Docker containers** - No need to install ffmpeg
+- 🌐 **Serverless functions** - Minimal package size and cold start time
+- 📱 **Edge computing** - Lightweight deployment
+- 🔒 **Security-conscious environments** - No external binaries to audit
 
 ## 🚀 Quick Start
 

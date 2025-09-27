@@ -7,6 +7,7 @@ export declare class HlsStreamer {
     private readonly enableFastStart;
     private fileInfo?;
     private segmentCache;
+    private frameAlignedSegments;
     constructor(options: HlsStreamerOptions);
     private validateOptions;
     private validateFile;
@@ -18,6 +19,8 @@ export declare class HlsStreamer {
     private buildSegmentUrl;
     private calculateSegmentSize;
     private calculateSegment;
+    private getFrameAlignedSegment;
+    private findNextMp3Frame;
     private calculatefirst2SegmentSize;
     private padNumber;
     getSegmentDuration(segmentIndex: number): Promise<number>;
