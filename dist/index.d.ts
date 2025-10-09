@@ -6,22 +6,20 @@ export declare class HlsStreamer {
     private readonly baseUrl;
     private readonly enableFastStart;
     private fileInfo?;
-    private segmentCache;
-    private frameAlignedSegments;
+    private segments;
     constructor(options: HlsStreamerOptions);
     private validateOptions;
     private validateFile;
     private getFileInfo;
     getFileBuffer(startByte: number, endByte: number): Promise<Buffer>;
     createM3U8(): Promise<string>;
-    private calculateSegmentCount;
+    private getSegments;
+    private computeTargetSizes;
+    private computeTargetSizesFromBytes;
+    private buildSegmentsWithoutFrameTable;
     private estimateSegmentDuration;
     private buildSegmentUrl;
     private calculateSegmentSize;
-    private calculateSegment;
-    private getFrameAlignedSegment;
-    private findNextMp3Frame;
-    private calculatefirst2SegmentSize;
     private padNumber;
     getSegmentDuration(segmentIndex: number): Promise<number>;
 }

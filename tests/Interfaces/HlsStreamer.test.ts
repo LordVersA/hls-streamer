@@ -82,7 +82,9 @@ describe('HlsStreamer Interfaces', () => {
     it('should define interface with all required properties', () => {
       const fileInfo: Mp3FileInfo = {
         size: 1048576,
-        duration: 180.5
+        duration: 180.5,
+        audioDataSize: 1048000,
+        frames: []
       };
 
       expect(fileInfo.size).toBe(1048576);
@@ -92,7 +94,9 @@ describe('HlsStreamer Interfaces', () => {
     it('should allow zero values', () => {
       const fileInfo: Mp3FileInfo = {
         size: 0,
-        duration: 0
+        duration: 0,
+        audioDataSize: 0,
+        frames: []
       };
 
       expect(fileInfo.size).toBe(0);
@@ -102,7 +106,14 @@ describe('HlsStreamer Interfaces', () => {
     it('should allow large values', () => {
       const fileInfo: Mp3FileInfo = {
         size: Number.MAX_SAFE_INTEGER,
-        duration: 99999.999
+        duration: 99999.999,
+        audioDataSize: Number.MAX_SAFE_INTEGER,
+        frames: [],
+        sampleRate: 44100,
+        averageBitrate: 128,
+        id3v2Size: 0,
+        id3v1Size: 0,
+        warnings: ['example']
       };
 
       expect(fileInfo.size).toBe(Number.MAX_SAFE_INTEGER);

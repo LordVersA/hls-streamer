@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { HlsStreamer } from '../src/index';
+import { FileLib } from '../src/Libs/FileLib';
 import {
   FileNotFoundError,
   InvalidFileError,
@@ -9,16 +10,37 @@ import {
 } from '../src/errors/HlsStreamerErrors';
 import { MockMP3 } from './fixtures/mock-mp3';
 
-// Mock the FileLib.getMP3DurationFromBuffer to return predictable durations
-jest.mock('../src/Libs/FileLib', () => ({
-  FileLib: {
-    getMP3DurationFromBuffer: jest.fn().mockImplementation((buffer: Buffer) => {
-      // Return a duration based on buffer size for predictable testing
-      const estimatedDuration = buffer.length / 16000; // ~128kbps MP3
-      return Promise.resolve(Math.max(0.1, estimatedDuration));
-    })
-  }
-}));
+const parseM3U8 = (playlist: string) => {
+  const lines = playlist.split('\n').map((line) => line.trim()).filter(Boolean);
+  const targetLine = lines.find((line) => line.startsWith('#EXT-X-TARGETDURATION:'));
+  const targetDuration = targetLine ? parseInt(targetLine.split(':')[1]!, 10) : undefined;
+
+  const durationLines = lines.filter((line) => line.startsWith('#EXTINF:'));
+  const durations = durationLines.map((line) => {
+    const numeric = line.replace('#EXTINF:', '').replace(',', '');
+    return parseFloat(numeric);
+  }).filter((value) => !Number.isNaN(value));
+
+  const segmentUris = lines.filter((line) => !line.startsWith('#'));
+  const segments = segmentUris.map((uri) => {
+    const match = uri.match(/\/(\d+)\/(\d+)\/[^/]+$/);
+    if (!match) {
+      return { uri, start: NaN, end: NaN };
+    }
+
+    return {
+      uri,
+      start: Number(match[1]),
+      end: Number(match[2])
+    };
+  });
+
+  return {
+    targetDuration,
+    durations,
+    segments
+  };
+};
 
 describe('HlsStreamer', () => {
   const testFilesDir = path.join(__dirname, 'temp');
@@ -42,11 +64,7 @@ describe('HlsStreamer', () => {
 
   afterAll(async () => {
     // Clean up temp directory
-    try {
-      await fs.promises.rmdir(testFilesDir);
-    } catch (error) {
-      // Ignore if directory is not empty or doesn't exist
-    }
+    await fs.promises.rm(testFilesDir, { recursive: true, force: true });
   });
 
   describe('Constructor', () => {
@@ -214,26 +232,44 @@ describe('HlsStreamer', () => {
       });
     });
 
-    it('should generate valid M3U8 playlist', async () => {
+    it('should generate valid playlist with accurate target duration', async () => {
       const m3u8 = await streamer.createM3U8();
+      const { targetDuration, durations, segments } = parseM3U8(m3u8);
 
       expect(m3u8).toContain('#EXTM3U');
       expect(m3u8).toContain('#EXT-X-VERSION:6');
       expect(m3u8).toContain('#EXT-X-PLAYLIST-TYPE:VOD');
-      expect(m3u8).toContain('#EXT-X-TARGETDURATION:14');
       expect(m3u8).toContain('#EXT-X-MEDIA-SEQUENCE:0');
       expect(m3u8).toContain('#EXT-X-ENDLIST');
+
+      expect(targetDuration).toBeGreaterThan(0);
+      expect(durations.length).toBeGreaterThan(0);
+      expect(durations.length).toBe(segments.length);
+
+      const maxDuration = Math.max(...durations);
+      expect(targetDuration).toBe(Math.ceil(maxDuration));
+
+      segments.forEach((segment) => {
+        expect(Number.isNaN(segment.start)).toBe(false);
+        expect(Number.isNaN(segment.end)).toBe(false);
+        expect(segment.end).toBeGreaterThan(segment.start);
+      });
+
+      const fileInfo = await FileLib.analyzeMP3File(testMP3Path);
+      const lastFrame = fileInfo.frames[fileInfo.frames.length - 1];
+      if (lastFrame) {
+        const lastSegment = segments[segments.length - 1];
+        expect(lastSegment?.end).toBe(lastFrame.offset + lastFrame.length);
+      }
     });
 
-    it('should contain segment entries', async () => {
+    it('should include configured baseUrl and segment naming', async () => {
       const m3u8 = await streamer.createM3U8();
-
-      expect(m3u8).toContain('#EXTINF:');
       expect(m3u8).toContain('/api/');
       expect(m3u8).toContain('test000.mp3');
     });
 
-    it('should handle empty baseUrl', async () => {
+    it('should handle empty baseUrl without double slashes', async () => {
       const streamerNoBase = new HlsStreamer({
         filePath: testMP3Path,
         segmentSizeKB: 1,
@@ -241,18 +277,13 @@ describe('HlsStreamer', () => {
       });
 
       const m3u8 = await streamerNoBase.createM3U8();
-      expect(m3u8).not.toContain('//'); // Should not have double slashes
+      expect(m3u8).toContain('#EXTINF:');
+      expect(m3u8).not.toContain('//test');
     });
 
-    it('should generate correct number of segments', async () => {
-      const m3u8 = await streamer.createM3U8();
-      const extinf_count = (m3u8.match(/#EXTINF:/g) || []).length;
+    it('should adapt segment sizes when fast start is enabled', async () => {
+      const baseline = parseM3U8(await streamer.createM3U8());
 
-      // With 1MB file and 1KB segments, should have 1024 segments
-      expect(extinf_count).toBe(1024);
-    });
-
-    it('should handle enableFastStart option', async () => {
       const fastStartStreamer = new HlsStreamer({
         filePath: testMP3Path,
         segmentSizeKB: 1,
@@ -260,12 +291,10 @@ describe('HlsStreamer', () => {
         enableFastStart: true
       });
 
-      const m3u8 = await fastStartStreamer.createM3U8();
-      expect(m3u8).toContain('#EXTINF:');
+      const fastStart = parseM3U8(await fastStartStreamer.createM3U8());
 
-      // Should have more segments due to smaller initial segments
-      const extinf_count = (m3u8.match(/#EXTINF:/g) || []).length;
-      expect(extinf_count).toBeGreaterThan(1024);
+      expect(fastStart.segments.length).toBeGreaterThanOrEqual(baseline.segments.length);
+      expect(fastStart.durations[0]).toBeLessThanOrEqual(baseline.durations[0]);
     });
   });
 
@@ -279,28 +308,24 @@ describe('HlsStreamer', () => {
       });
     });
 
-    it('should return duration for valid segment', async () => {
+    it('should return duration matching playlist metadata', async () => {
+      const playlist = parseM3U8(await streamer.createM3U8());
       const duration = await streamer.getSegmentDuration(0);
-      expect(typeof duration).toBe('number');
-      expect(duration).toBeGreaterThan(0);
+
+      expect(duration).toBeCloseTo(playlist.durations[0]!, 3);
     });
 
-    it('should cache segment duration', async () => {
-      const duration1 = await streamer.getSegmentDuration(0);
-      const duration2 = await streamer.getSegmentDuration(0);
-
-      expect(duration1).toBe(duration2);
-    });
-
-    it('should return different durations for different segments', async () => {
+    it('should return valid durations for subsequent segments', async () => {
       const duration0 = await streamer.getSegmentDuration(0);
       const duration1 = await streamer.getSegmentDuration(1);
 
-      // They might be the same or different, but both should be valid
-      expect(typeof duration0).toBe('number');
-      expect(typeof duration1).toBe('number');
       expect(duration0).toBeGreaterThan(0);
       expect(duration1).toBeGreaterThan(0);
+    });
+
+    it('should reject invalid segment indices', async () => {
+      await expect(streamer.getSegmentDuration(-1)).rejects.toThrow(InvalidParameterError);
+      await expect(streamer.getSegmentDuration(99999)).rejects.toThrow(InvalidParameterError);
     });
   });
 
@@ -315,7 +340,10 @@ describe('HlsStreamer', () => {
       });
 
       const m3u8 = await streamer.createM3U8();
-      expect(m3u8).toContain('#EXTM3U');
+      const parsed = parseM3U8(m3u8);
+      expect(parsed.segments.length).toBeGreaterThan(0);
+      expect(parsed.durations.length).toBeGreaterThan(0);
+      expect(parsed.durations[0]).toBeGreaterThan(0);
 
       await MockMP3.cleanup(smallMP3Path);
     });
@@ -329,8 +357,12 @@ describe('HlsStreamer', () => {
         segmentSizeKB: 1 // 1KB > 100 bytes
       });
 
-      // Constructor shouldn't throw, but createM3U8 will when it tries to get file info
-      await expect(streamer.createM3U8()).rejects.toThrow(InvalidFileError);
+      const m3u8 = await streamer.createM3U8();
+      const parsed = parseM3U8(m3u8);
+
+      expect(parsed.segments.length).toBe(1);
+      expect(parsed.durations.length).toBe(1);
+      expect(parsed.durations[0]).toBeGreaterThan(0);
 
       await MockMP3.cleanup(smallMP3Path);
     });
@@ -362,19 +394,50 @@ describe('HlsStreamer', () => {
 
       // Generate M3U8
       const m3u8 = await streamer.createM3U8();
-      expect(m3u8).toContain('#EXTM3U');
-      expect(m3u8).toContain('music');
-      expect(m3u8).toContain('/stream/');
+      const parsed = parseM3U8(m3u8);
 
-      // Get first segment
-      const buffer = await streamer.getFileBuffer(0, 2500); // ~2.5KB
-      expect(buffer.length).toBe(2500);
+      expect(parsed.segments.length).toBeGreaterThan(0);
+      expect(parsed.durations[0]).toBeGreaterThan(0);
 
-      // Get segment duration
+      const firstSegment = parsed.segments[0]!;
+      const buffer = await streamer.getFileBuffer(firstSegment.start, firstSegment.end);
+      expect(buffer.length).toBe(firstSegment.end - firstSegment.start);
+
       const duration = await streamer.getSegmentDuration(0);
-      expect(duration).toBeGreaterThan(0);
+      expect(duration).toBeCloseTo(parsed.durations[0]!, 3);
 
       await MockMP3.cleanup(largeMP3Path);
+    });
+
+    it('should generate playlists from a real MP3 fixture without mocks', async () => {
+      const realFixturePath = path.resolve(__dirname, '..', 'example', 'sample.mp3');
+
+      const streamer = new HlsStreamer({
+        filePath: realFixturePath,
+        segmentSizeKB: 512,
+        fileName: 'sample',
+        baseUrl: 'cdn'
+      });
+
+      const m3u8 = await streamer.createM3U8();
+      const parsed = parseM3U8(m3u8);
+
+      expect(parsed.segments.length).toBeGreaterThan(0);
+      expect(parsed.durations.length).toBeGreaterThan(0);
+
+      const fileInfo = await FileLib.analyzeMP3File(realFixturePath);
+      const lastFrame = fileInfo.frames[fileInfo.frames.length - 1];
+      if (lastFrame) {
+        const lastSegment = parsed.segments[parsed.segments.length - 1];
+        expect(lastSegment?.end).toBe(lastFrame.offset + lastFrame.length);
+      }
+
+      const targetDuration = parsed.targetDuration ?? 0;
+      const maxDuration = Math.max(...parsed.durations);
+      expect(targetDuration).toBe(Math.ceil(maxDuration));
+
+      const duration = await streamer.getSegmentDuration(0);
+      expect(duration).toBeCloseTo(parsed.durations[0]!, 3);
     });
   });
 });

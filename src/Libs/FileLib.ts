@@ -1,7 +1,50 @@
+import fs from 'node:fs';
+import { Mp3FileInfo, Mp3FrameInfo } from '../Interfaces/HlsStreamer';
+
+interface Id3Offsets {
+  startOffset: number;
+  id3v2Size: number;
+  audioEnd: number;
+  id3v1Size: number;
+}
+
+interface ParsedFrameHeader {
+  version: 1 | 2 | 25;
+  layer: 1 | 2 | 3;
+  bitrate: number;
+  sampleRate: number;
+  padding: 0 | 1;
+  samplesPerFrame: number;
+}
+
 /**
  * File utility functions
  */
 export class FileLib {
+  private static readonly BITRATE_INDEX: Record<1 | 2 | 25, Record<1 | 2 | 3, number[]>> = {
+    1: {
+      1: [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
+      2: [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384],
+      3: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
+    },
+    2: {
+      1: [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256],
+      2: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+      3: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160]
+    },
+    25: {
+      1: [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256],
+      2: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+      3: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160]
+    }
+  };
+
+  private static readonly SAMPLE_RATE_INDEX: Record<1 | 2 | 25, number[]> = {
+    1: [44100, 48000, 32000],
+    2: [22050, 24000, 16000],
+    25: [11025, 12000, 8000]
+  };
+
   /**
    * Get buffer size in bytes
    */
@@ -16,151 +59,277 @@ export class FileLib {
   /**
    * Extract MP3 duration from buffer data (zero dependency implementation)
    */
-  static getMP3DurationFromBuffer(mp3Buffer: Buffer): Promise<number> {
-    return new Promise((resolve, reject) => {
-      try {
-        const duration = this.parseMP3Duration(mp3Buffer);
-        resolve(duration);
-      } catch (error) {
-        reject(error);
-      }
-    });
+  static async getMP3DurationFromBuffer(mp3Buffer: Buffer): Promise<number> {
+    const { duration } = this.analyzeMP3Buffer(mp3Buffer);
+    return duration;
   }
 
   /**
-   * Parse MP3 duration by reading frame headers
+   * Parse MP3 buffer returning detailed metadata
    */
-  private static parseMP3Duration(buffer: Buffer): number {
-    // Handle empty buffers
+  static analyzeMP3Buffer(buffer: Buffer, opts: { fileSize?: number } = {}): Mp3FileInfo {
+    const warnings: string[] = [];
+    const size = opts.fileSize ?? buffer.length;
+
     if (buffer.length === 0) {
-      return 0;
+      return {
+        size,
+        duration: 0,
+        audioDataSize: 0,
+        frames: []
+      };
     }
 
-    const bitrates = [
-      [0, 0, 0, 0, 0],
-      [32, 32, 32, 32, 8],
-      [64, 48, 40, 48, 16],
-      [96, 56, 48, 56, 24],
-      [128, 64, 56, 64, 32],
-      [160, 80, 64, 80, 40],
-      [192, 96, 80, 96, 48],
-      [224, 112, 96, 112, 56],
-      [256, 128, 112, 128, 64],
-      [288, 160, 128, 144, 80],
-      [320, 192, 160, 160, 96],
-      [352, 224, 192, 176, 112],
-      [384, 256, 224, 192, 128],
-      [416, 320, 256, 224, 144],
-      [448, 384, 320, 256, 160]
-    ];
+    const offsets = this.getId3Offsets(buffer);
+    const frames: Mp3FrameInfo[] = [];
+    const payloadSize = Math.max(0, offsets.audioEnd - offsets.startOffset);
 
-    const sampleRates = [
-      [44100, 22050, 11025],
-      [48000, 24000, 12000],
-      [32000, 16000, 8000]
-    ];
+    let offset = offsets.startOffset;
+    let frameIndex = 0;
+    let sampleRate: number | undefined;
+    let totalDuration = 0;
+    let totalAudioBytes = 0;
 
-    let offset = 0;
-    let totalFrames = 0;
-    let sampleRate = 0;
-    let samplesPerFrame = 0;
-
-    // Skip ID3v2 tag if present
-    if (buffer.length > 10 && buffer.toString('ascii', 0, 3) === 'ID3') {
-      const tagSize = ((buffer[6]! & 0x7f) << 21) |
-                     ((buffer[7]! & 0x7f) << 14) |
-                     ((buffer[8]! & 0x7f) << 7) |
-                     (buffer[9]! & 0x7f);
-      offset = 10 + tagSize;
-    }
-
-    while (offset < buffer.length - 3) {
-      // Look for MP3 frame sync (11 bits set)
-      if ((buffer[offset]! === 0xFF) && ((buffer[offset + 1]! & 0xE0) === 0xE0)) {
-        if (offset + 3 >= buffer.length) break;
-
-        const header = (buffer[offset]! << 24) |
-                      (buffer[offset + 1]! << 16) |
-                      (buffer[offset + 2]! << 8) |
-                      buffer[offset + 3]!;
-
-        // Extract header fields
-        const version = (header >> 19) & 0x3;
-        const layer = (header >> 17) & 0x3;
-        const bitrateIndex = (header >> 12) & 0xF;
-        const sampleRateIndex = (header >> 10) & 0x3;
-        const padding = (header >> 9) & 0x1;
-
-        // Validate header
-        if (version === 1 || layer === 0 || bitrateIndex === 0 || bitrateIndex === 15 || sampleRateIndex === 3) {
-          offset++;
-          continue;
-        }
-
-        // Get bitrate and sample rate
-        const versionIndex = version === 3 ? 0 : (version === 2 ? 1 : 2);
-        const layerIndex = layer === 3 ? 0 : (layer === 2 ? 1 : 2);
-
-        const bitrate = bitrates[bitrateIndex]?.[versionIndex === 0 ? layerIndex : (layerIndex === 0 ? 3 : 4)];
-        const foundSampleRate = sampleRates[sampleRateIndex]?.[versionIndex];
-
-        if (!bitrate || !foundSampleRate) {
-          offset++;
-          continue;
-        }
-
-        // Set sample rate and samples per frame on first valid frame
-        if (totalFrames === 0) {
-          sampleRate = foundSampleRate;
-
-          // Calculate samples per frame
-          if (layer === 3) { // Layer I
-            samplesPerFrame = 384;
-          } else if (layer === 2) { // Layer II
-            samplesPerFrame = 1152;
-          } else { // Layer III
-            samplesPerFrame = version === 3 ? 1152 : 576;
-          }
-        }
-
-        // Calculate frame length
-        let frameLength;
-        if (layer === 3) { // Layer I
-          frameLength = Math.floor((12 * bitrate * 1000 / foundSampleRate + padding) * 4);
-        } else { // Layer II & III
-          frameLength = Math.floor(144 * bitrate * 1000 / foundSampleRate + padding);
-        }
-
-        if (frameLength <= 0) {
-          offset++;
-          continue;
-        }
-
-        totalFrames++;
-
-        // If we would go beyond buffer, estimate remaining frames
-        if (offset + frameLength > buffer.length) {
-          const remainingBytes = buffer.length - offset;
-          const avgFrameLength = offset > 0 ? offset / totalFrames : frameLength;
-          const estimatedRemainingFrames = Math.floor(remainingBytes / avgFrameLength);
-          totalFrames += estimatedRemainingFrames;
-          break;
-        }
-
-        offset += frameLength;
-      } else {
+    while (offset + 4 <= offsets.audioEnd) {
+      if (!this.isFrameSync(buffer, offset)) {
         offset++;
+        continue;
+      }
+
+      const header = buffer.readUInt32BE(offset);
+      const parsed = this.parseFrameHeader(header);
+
+      if (!parsed) {
+        offset++;
+        continue;
+      }
+
+      const frameLength = this.calculateFrameLength(parsed);
+
+      if (frameLength <= 0) {
+        warnings.push(`Encountered zero-length frame at offset ${offset}`);
+        offset++;
+        continue;
+      }
+
+      // Guard against truncated final frame
+      if (offset + frameLength > buffer.length) {
+        warnings.push(`Truncated frame at offset ${offset}`);
+        break;
+      }
+
+      sampleRate = sampleRate ?? parsed.sampleRate;
+
+      const frameDuration = parsed.samplesPerFrame / parsed.sampleRate;
+
+      frames.push({
+        index: frameIndex,
+        offset,
+        length: frameLength,
+        duration: frameDuration,
+        samples: parsed.samplesPerFrame,
+        sampleRate: parsed.sampleRate,
+        bitrate: parsed.bitrate,
+        padding: parsed.padding
+      });
+
+      frameIndex++;
+      totalDuration += frameDuration;
+      totalAudioBytes += frameLength;
+      offset += frameLength;
+    }
+
+    if (frames.length === 0) {
+      const estimatedDuration = buffer.length / 16000; // ~128kbps = 16000 bytes/sec
+      warnings.push('Falling back to heuristic duration due to missing MP3 frames');
+      const metadata: Mp3FileInfo = {
+        size,
+        duration: Math.max(0.001, estimatedDuration),
+        audioDataSize: payloadSize,
+        frames: []
+      };
+
+      if (warnings.length) {
+        metadata.warnings = warnings;
+      }
+
+      return metadata;
+    }
+
+    const duration = totalDuration;
+    const averageBitrate = duration > 0 ? (totalAudioBytes * 8) / duration / 1000 : undefined;
+
+    const metadata: Mp3FileInfo = {
+      size,
+      duration,
+      audioDataSize: totalAudioBytes || payloadSize,
+      frames
+    };
+
+    if (sampleRate !== undefined) {
+      metadata.sampleRate = sampleRate;
+    }
+
+    if (averageBitrate !== undefined) {
+      metadata.averageBitrate = averageBitrate;
+    }
+
+    if (offsets.id3v2Size > 0) {
+      metadata.id3v2Size = offsets.id3v2Size;
+    }
+
+    if (offsets.id3v1Size > 0) {
+      metadata.id3v1Size = offsets.id3v1Size;
+    }
+
+    if (warnings.length) {
+      metadata.warnings = warnings;
+    }
+
+    return metadata;
+  }
+
+  /**
+   * Load MP3 file from disk and return metadata
+   */
+  static async analyzeMP3File(filePath: string): Promise<Mp3FileInfo> {
+    const [buffer, stat] = await Promise.all([
+      fs.promises.readFile(filePath),
+      fs.promises.stat(filePath)
+    ]);
+
+    return this.analyzeMP3Buffer(buffer, { fileSize: stat.size });
+  }
+
+  private static calculateFrameLength(frame: ParsedFrameHeader): number {
+    if (frame.layer === 1) {
+      return Math.floor(((12 * frame.bitrate * 1000) / frame.sampleRate + frame.padding) * 4);
+    }
+
+    const multiplier = frame.layer === 3 && frame.version !== 1 ? 72 : 144;
+    return Math.floor((multiplier * frame.bitrate * 1000) / frame.sampleRate + frame.padding);
+  }
+
+  private static getId3Offsets(buffer: Buffer): Id3Offsets {
+    let startOffset = 0;
+    let id3v2Size = 0;
+
+    if (buffer.length >= 10 && buffer.toString('ascii', 0, 3) === 'ID3') {
+      const sizeBytes = buffer.subarray(6, 10);
+      id3v2Size = this.syncSafeInteger(sizeBytes);
+      startOffset = Math.min(buffer.length, 10 + id3v2Size);
+    }
+
+    // Detect ID3v1 tag at end (128 bytes starting with 'TAG')
+    let id3v1Size = 0;
+    let audioEnd = buffer.length;
+
+    if (buffer.length >= 128) {
+      const tagOffset = buffer.length - 128;
+      if (buffer.toString('ascii', tagOffset, tagOffset + 3) === 'TAG') {
+        id3v1Size = 128;
+        audioEnd = tagOffset;
       }
     }
 
-    if (totalFrames === 0 || !sampleRate || !samplesPerFrame) {
-      // Fallback: estimate duration based on typical MP3 bitrate (128kbps)
-      const estimatedDuration = buffer.length / 16000; // ~128kbps = 16000 bytes/sec
-      return Math.max(0.001, estimatedDuration); // Minimum 1ms
+    return {
+      startOffset,
+      id3v2Size,
+      audioEnd,
+      id3v1Size
+    };
+  }
+
+  private static syncSafeInteger(bytes: Buffer): number {
+    return ((bytes[0]! & 0x7f) << 21) |
+           ((bytes[1]! & 0x7f) << 14) |
+           ((bytes[2]! & 0x7f) << 7) |
+           (bytes[3]! & 0x7f);
+  }
+
+  private static isFrameSync(buffer: Buffer, offset: number): boolean {
+    const byte1 = buffer[offset];
+    const byte2 = buffer[offset + 1];
+
+    if (byte1 === undefined || byte2 === undefined) {
+      return false;
     }
 
-    // Calculate duration in seconds
-    const duration = (totalFrames * samplesPerFrame) / sampleRate;
-    return Math.max(0.001, duration); // Minimum 1ms
+    return byte1 === 0xff && (byte2 & 0xe0) === 0xe0;
+  }
+
+  private static parseFrameHeader(header: number): ParsedFrameHeader | null {
+    const versionBits = (header >> 19) & 0x3;
+    const layerBits = (header >> 17) & 0x3;
+    const bitrateIndex = (header >> 12) & 0xf;
+    const sampleRateIndex = (header >> 10) & 0x3;
+    const padding = ((header >> 9) & 0x1) as 0 | 1;
+
+    const version = this.decodeVersion(versionBits);
+    const layer = this.decodeLayer(layerBits);
+
+    if (!version || !layer) {
+      return null;
+    }
+
+    if (bitrateIndex === 0 || bitrateIndex === 15 || sampleRateIndex === 3) {
+      return null;
+    }
+
+    const bitrate = this.BITRATE_INDEX[version][layer][bitrateIndex];
+    const sampleRate = this.SAMPLE_RATE_INDEX[version][sampleRateIndex];
+
+    if (!bitrate || !sampleRate) {
+      return null;
+    }
+
+    const samplesPerFrame = this.getSamplesPerFrame(version, layer);
+
+    return {
+      version,
+      layer,
+      bitrate,
+      sampleRate,
+      padding,
+      samplesPerFrame
+    };
+  }
+
+  private static decodeVersion(bits: number): 1 | 2 | 25 | null {
+    switch (bits) {
+      case 0b11:
+        return 1;
+      case 0b10:
+        return 2;
+      case 0b00:
+        return 25;
+      default:
+        return null;
+    }
+  }
+
+  private static decodeLayer(bits: number): 1 | 2 | 3 | null {
+    switch (bits) {
+      case 0b11:
+        return 1;
+      case 0b10:
+        return 2;
+      case 0b01:
+        return 3;
+      default:
+        return null;
+    }
+  }
+
+  private static getSamplesPerFrame(version: 1 | 2 | 25, layer: 1 | 2 | 3): number {
+    if (layer === 1) {
+      return 384;
+    }
+
+    if (layer === 2) {
+      return 1152;
+    }
+
+    return version === 1 ? 1152 : 576;
   }
 }

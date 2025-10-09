@@ -1,6 +1,6 @@
 {
   "name": "hls-streamer",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Lightweight HLS streaming from MP3 files on demand, without temporary files or ffmpeg dependency",
   "main": "dist/index.js",
   "module": "dist/index.js",

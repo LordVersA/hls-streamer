@@ -2,19 +2,31 @@ import fs from 'fs';
 import path from 'path';
 
 export class MockMP3 {
+  private static readonly FRAME_HEADER = Buffer.from([0xFF, 0xFB, 0x90, 0x00]);
+  private static readonly FRAME_LENGTH = 417; // Layer III, MPEG1, 128kbps @ 44.1kHz
+
   static createMockMP3Buffer(sizeInBytes: number = 1024): Buffer {
-    // Create a buffer that looks like a basic MP3 file
+    if (sizeInBytes <= 0) {
+      return Buffer.alloc(0);
+    }
+
     const buffer = Buffer.alloc(sizeInBytes);
+    let offset = 0;
 
-    // Add MP3 header (frame sync bits)
-    buffer[0] = 0xFF; // Frame sync (11111111)
-    buffer[1] = 0xFB; // Frame sync (111) + Version (01) + Layer (01) + Protection (1)
-    buffer[2] = 0x90; // Bitrate (1001) + Sample rate (00) + Padding (0) + Private (0)
-    buffer[3] = 0x00; // Channel mode (00) + Mode extension (00) + Copyright (0) + Original (0) + Emphasis (00)
+    while (offset + this.FRAME_LENGTH <= sizeInBytes) {
+      this.FRAME_HEADER.copy(buffer, offset);
+      for (let i = 4; i < this.FRAME_LENGTH; i++) {
+        buffer[offset + i] = (i - 4) & 0xFF;
+      }
+      offset += this.FRAME_LENGTH;
+    }
 
-    // Fill the rest with some pattern to simulate audio data
-    for (let i = 4; i < sizeInBytes; i++) {
-      buffer[i] = (i % 256);
+    const remaining = sizeInBytes - offset;
+    if (remaining > 0) {
+      this.FRAME_HEADER.copy(buffer, offset, 0, Math.min(4, remaining));
+      for (let i = 4; i < remaining; i++) {
+        buffer[offset + i] = i & 0xFF;
+      }
     }
 
     return buffer;
