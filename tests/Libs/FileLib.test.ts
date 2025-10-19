@@ -1,5 +1,8 @@
 import { FileLib } from '../../src/Libs/FileLib';
 import { MockMP3 } from '../fixtures/mock-mp3';
+import { MockAudio } from '../fixtures/mock-audio';
+import fs from 'fs';
+import path from 'path';
 
 describe('FileLib', () => {
   describe('getFileSizeInBytes', () => {
@@ -105,6 +108,192 @@ describe('FileLib', () => {
 
       expect(typeof duration).toBe('number');
       expect(duration).toBeGreaterThan(0);
+    });
+  });
+
+  describe('analyzeAudioFile', () => {
+    const testDir = path.join(__dirname, '../temp-filelib-audio');
+    const wavFile = path.join(testDir, 'test-filelib.wav');
+    const flacFile = path.join(testDir, 'test-filelib.flac');
+    const aacFile = path.join(testDir, 'test-filelib.aac');
+    const m4aFile = path.join(testDir, 'test-filelib.m4a');
+
+    beforeAll(async () => {
+      await fs.promises.mkdir(testDir, { recursive: true });
+      MockAudio.createWav(wavFile, 2);
+      MockAudio.createFlac(flacFile);
+      MockAudio.createAac(aacFile);
+      MockAudio.createM4a(m4aFile);
+    });
+
+    afterAll(async () => {
+      await MockAudio.cleanup(wavFile, flacFile, aacFile, m4aFile);
+      try {
+        await fs.promises.rmdir(testDir);
+      } catch (e) {
+        // Ignore
+      }
+    });
+
+    it('should analyze WAV file with auto-detection', async () => {
+      const result = await FileLib.analyzeAudioFile(wavFile);
+
+      expect(result.format).toBe('wav');
+      expect(result.duration).toBeGreaterThan(0);
+      expect(result.sampleRate).toBe(44100);
+      expect(result.channels).toBe(2);
+      expect(result.frames.length).toBeGreaterThan(0);
+    });
+
+    it('should analyze FLAC file with auto-detection', async () => {
+      const result = await FileLib.analyzeAudioFile(flacFile);
+
+      expect(result.format).toBe('flac');
+      expect(result.duration).toBeGreaterThan(0);
+      expect(result.sampleRate).toBe(44100);
+      expect(result.channels).toBe(2);
+    });
+
+    it('should analyze AAC file with auto-detection', async () => {
+      const result = await FileLib.analyzeAudioFile(aacFile);
+
+      expect(result.format).toBe('aac');
+      expect(result.frames.length).toBeGreaterThan(0);
+    });
+
+    it('should analyze M4A file with auto-detection', async () => {
+      const result = await FileLib.analyzeAudioFile(m4aFile);
+
+      expect(result.format).toBe('m4a');
+      expect(result.duration).toBeGreaterThan(0);
+    });
+
+    it('should analyze file with format override', async () => {
+      const result = await FileLib.analyzeAudioFile(wavFile, 'wav');
+
+      expect(result.format).toBe('wav');
+      expect(result.duration).toBeGreaterThan(0);
+    });
+
+    it('should include fileSize in metadata', async () => {
+      const result = await FileLib.analyzeAudioFile(wavFile);
+      const stat = await fs.promises.stat(wavFile);
+
+      expect(result.size).toBe(stat.size);
+    });
+
+    it('should throw error for unsupported format override', async () => {
+      try {
+        await FileLib.analyzeAudioFile(wavFile, 'unknown' as any);
+        fail('Should have thrown an error');
+      } catch (error: any) {
+        expect(error.message).toContain('Unsupported format');
+      }
+    });
+
+    it('should throw error for unknown file format', async () => {
+      const unknownFile = path.join(testDir, 'unknown.xyz');
+
+      try {
+        await fs.promises.writeFile(unknownFile, 'unknown content');
+
+        try {
+          await FileLib.analyzeAudioFile(unknownFile);
+          fail('Should have thrown an error');
+        } catch (error: any) {
+          expect(error.message).toContain('Could not detect audio format');
+        }
+      } finally {
+        try {
+          await fs.promises.unlink(unknownFile);
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+      }
+    });
+  });
+
+  describe('analyzeAudioBuffer', () => {
+    const testDir = path.join(__dirname, '../temp-filelib-buffer');
+    const wavFile = path.join(testDir, 'test-buffer.wav');
+
+    beforeAll(async () => {
+      await fs.promises.mkdir(testDir, { recursive: true });
+      MockAudio.createWav(wavFile, 1);
+    });
+
+    afterAll(async () => {
+      await MockAudio.cleanup(wavFile);
+      try {
+        await fs.promises.rmdir(testDir);
+      } catch (e) {
+        // Ignore
+      }
+    });
+
+    it('should analyze WAV buffer with auto-detection from content', async () => {
+      const buffer = await fs.promises.readFile(wavFile);
+      const result = FileLib.analyzeAudioBuffer(buffer);
+
+      expect(result.format).toBe('wav');
+      expect(result.duration).toBeGreaterThan(0);
+    });
+
+    it('should analyze buffer with format override', async () => {
+      const buffer = await fs.promises.readFile(wavFile);
+      const result = FileLib.analyzeAudioBuffer(buffer, { format: 'wav' });
+
+      expect(result.format).toBe('wav');
+      expect(result.duration).toBeGreaterThan(0);
+    });
+
+    it('should analyze buffer with filePath hint for format detection', async () => {
+      const buffer = await fs.promises.readFile(wavFile);
+      const result = FileLib.analyzeAudioBuffer(buffer, { filePath: 'test.wav' });
+
+      expect(result.format).toBe('wav');
+    });
+
+    it('should use fileSize option when provided', async () => {
+      const buffer = await fs.promises.readFile(wavFile);
+      const fileSize = 10000;
+      const result = FileLib.analyzeAudioBuffer(buffer, { fileSize });
+
+      expect(result.size).toBe(fileSize);
+    });
+
+    it('should default to buffer length when fileSize not provided', async () => {
+      const buffer = await fs.promises.readFile(wavFile);
+      const result = FileLib.analyzeAudioBuffer(buffer);
+
+      expect(result.size).toBe(buffer.length);
+    });
+
+    it('should throw error for unsupported format override', async () => {
+      const buffer = await fs.promises.readFile(wavFile);
+
+      expect(() =>
+        FileLib.analyzeAudioBuffer(buffer, { format: 'unknown' as any })
+      ).toThrow('Unsupported format');
+    });
+
+    it('should throw error when format cannot be detected', () => {
+      const buffer = Buffer.from('UNKNOWN_CONTENT');
+
+      expect(() =>
+        FileLib.analyzeAudioBuffer(buffer)
+      ).toThrow('Could not detect audio format');
+    });
+
+    it('should prioritize format override over other detection methods', async () => {
+      const buffer = await fs.promises.readFile(wavFile);
+
+      const result = FileLib.analyzeAudioBuffer(buffer, {
+        format: 'wav',
+        filePath: 'test.mp3' // Should ignore this
+      });
+
+      expect(result.format).toBe('wav');
     });
   });
 });

@@ -6,7 +6,8 @@ import {
   FileNotFoundError,
   InvalidFileError,
   InvalidRangeError,
-  InvalidParameterError
+  InvalidParameterError,
+  UnsupportedFormatError
 } from '../src/errors/HlsStreamerErrors';
 import { MockMP3 } from './fixtures/mock-mp3';
 
@@ -162,13 +163,13 @@ describe('HlsStreamer', () => {
       }).toThrow(InvalidFileError);
     });
 
-    it('should throw InvalidFileError for non-MP3 file', async () => {
+    it('should throw UnsupportedFormatError for non-audio file', async () => {
       const txtPath = path.join(testFilesDir, 'test.txt');
-      await fs.promises.writeFile(txtPath, new Uint8Array(Buffer.from('not an mp3 file')));
+      await fs.promises.writeFile(txtPath, new Uint8Array(Buffer.from('not an audio file')));
 
       expect(() => {
         new HlsStreamer({ filePath: txtPath });
-      }).toThrow(InvalidFileError);
+      }).toThrow(UnsupportedFormatError);
 
       await MockMP3.cleanup(txtPath);
     });

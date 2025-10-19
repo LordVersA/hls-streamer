@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.FileLib = void 0;
 const node_fs_1 = __importDefault(require("node:fs"));
+const ParserFactory_1 = require("../Parsers/ParserFactory");
 class FileLib {
     static getFileSizeInBytes(buffer) {
         if (Buffer.isBuffer(buffer)) {
@@ -120,6 +121,40 @@ class FileLib {
             node_fs_1.default.promises.stat(filePath)
         ]);
         return this.analyzeMP3Buffer(buffer, { fileSize: stat.size });
+    }
+    static async analyzeAudioFile(filePath, format) {
+        const [buffer, stat] = await Promise.all([
+            node_fs_1.default.promises.readFile(filePath),
+            node_fs_1.default.promises.stat(filePath)
+        ]);
+        const opts = {
+            fileSize: stat.size,
+            filePath
+        };
+        if (format !== undefined) {
+            opts.format = format;
+        }
+        return this.analyzeAudioBuffer(buffer, opts);
+    }
+    static analyzeAudioBuffer(buffer, opts = {}) {
+        let parser;
+        if (opts.format) {
+            parser = ParserFactory_1.ParserFactory.getParser(opts.format);
+            if (!parser) {
+                throw new Error(`Unsupported format: ${opts.format}`);
+            }
+        }
+        if (!parser && opts.filePath) {
+            parser = ParserFactory_1.ParserFactory.getParserByExtension(opts.filePath);
+        }
+        if (!parser) {
+            parser = ParserFactory_1.ParserFactory.detectParser(buffer);
+        }
+        if (!parser) {
+            throw new Error('Could not detect audio format');
+        }
+        const analyzeOpts = opts.fileSize !== undefined ? { fileSize: opts.fileSize } : {};
+        return parser.analyze(buffer, analyzeOpts);
     }
     static calculateFrameLength(frame) {
         if (frame.layer === 1) {

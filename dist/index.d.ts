@@ -5,6 +5,7 @@ export declare class HlsStreamer {
     private readonly fileName;
     private readonly baseUrl;
     private readonly enableFastStart;
+    private readonly formatOverride;
     private fileInfo?;
     private segments;
     constructor(options: HlsStreamerOptions);

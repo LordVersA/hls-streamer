@@ -1,16 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
-import { HlsStreamerOptions, SegmentInfo, Mp3FileInfo } from "./Interfaces/HlsStreamer";
+import { HlsStreamerOptions, SegmentInfo, AudioFileInfo } from "./Interfaces/HlsStreamer";
 import { FileLib } from "./Libs/FileLib";
+import { FormatDetector } from "./Libs/FormatDetector";
 import {
   FileNotFoundError,
   InvalidFileError,
   InvalidRangeError,
-  InvalidParameterError
+  InvalidParameterError,
+  UnsupportedFormatError
 } from "./errors/HlsStreamerErrors";
 
 /**
- * HLS streaming implementation for MP3 files without temporary file storage
+ * HLS streaming implementation for audio files without temporary file storage
+ * Supports: MP3, AAC, M4A, OGG Vorbis, FLAC, WAV
  */
 export class HlsStreamer {
   private readonly filePath: string;
@@ -18,21 +21,23 @@ export class HlsStreamer {
   private readonly fileName: string;
   private readonly baseUrl: string;
   private readonly enableFastStart: boolean;
-  private fileInfo?: Mp3FileInfo;
+  private readonly formatOverride: string | undefined;
+  private fileInfo?: AudioFileInfo;
   private segments: SegmentInfo[] | undefined;
 
   /**
-   * Initialize HLS streamer with MP3 file and configuration
+   * Initialize HLS streamer with audio file and configuration
    */
   constructor(options: HlsStreamerOptions) {
     this.validateOptions(options);
-    this.validateFile(options.filePath);
+    this.validateFile(options.filePath, options.format);
 
     this.filePath = options.filePath;
     this.segmentSize = (options.segmentSizeKB ?? 512) * 1024;
     this.fileName = options.fileName ?? "file";
     this.baseUrl = options.baseUrl ?? "";
     this.enableFastStart = options.enableFastStart ?? false;
+    this.formatOverride = options.format || undefined;
   }
 
   private validateOptions(options: HlsStreamerOptions): void {
@@ -50,7 +55,7 @@ export class HlsStreamer {
     }
   }
 
-  private validateFile(filePath: string): void {
+  private validateFile(filePath: string, format?: string): void {
     if (!fs.existsSync(filePath)) {
       throw new FileNotFoundError(filePath);
     }
@@ -60,15 +65,24 @@ export class HlsStreamer {
       throw new InvalidFileError('Path is not a file');
     }
 
-    const ext = path.extname(filePath).toLowerCase();
-    if (ext !== '.mp3') {
-      throw new InvalidFileError('Only MP3 files are supported');
+    // If format is specified, validate it
+    if (format) {
+      const supportedFormats = ['mp3', 'aac', 'm4a', 'ogg', 'flac', 'wav'];
+      if (!supportedFormats.includes(format.toLowerCase())) {
+        throw new UnsupportedFormatError(format);
+      }
+    } else {
+      // Validate extension is supported
+      if (!FormatDetector.isSupportedExtension(filePath)) {
+        const ext = path.extname(filePath);
+        throw new UnsupportedFormatError(ext || 'unknown');
+      }
     }
   }
 
-  private async getFileInfo(): Promise<Mp3FileInfo> {
+  private async getFileInfo(): Promise<AudioFileInfo> {
     if (!this.fileInfo) {
-      const analysis = await FileLib.analyzeMP3File(this.filePath);
+      const analysis = await FileLib.analyzeAudioFile(this.filePath, this.formatOverride as any);
 
       if (analysis.size <= 0) {
         throw new InvalidFileError('File is empty');
@@ -224,7 +238,7 @@ export class HlsStreamer {
     return this.segments;
   }
 
-  private computeTargetSizes(fileInfo: Mp3FileInfo): number[] {
+  private computeTargetSizes(fileInfo: AudioFileInfo): number[] {
     const totalBytes = fileInfo.audioDataSize || fileInfo.size;
     return this.computeTargetSizesFromBytes(totalBytes);
   }
@@ -248,7 +262,7 @@ export class HlsStreamer {
     return targets.length ? targets : [totalBytes];
   }
 
-  private buildSegmentsWithoutFrameTable(fileInfo: Mp3FileInfo): SegmentInfo[] {
+  private buildSegmentsWithoutFrameTable(fileInfo: AudioFileInfo): SegmentInfo[] {
     const segments: SegmentInfo[] = [];
     const totalBytes = Math.max(fileInfo.size, fileInfo.audioDataSize);
 
@@ -261,29 +275,39 @@ export class HlsStreamer {
 
     targets.forEach((targetSize) => {
       const end = Math.min(totalBytes, start + targetSize);
-      const duration = this.estimateSegmentDuration(end - start);
+      const duration = this.estimateSegmentDuration(end - start, fileInfo);
       segments.push({ start, end, duration });
       start = end;
     });
 
     if (start < totalBytes) {
-      const duration = this.estimateSegmentDuration(totalBytes - start);
+      const duration = this.estimateSegmentDuration(totalBytes - start, fileInfo);
       segments.push({ start, end: totalBytes, duration });
     }
 
     return segments;
   }
 
-  private estimateSegmentDuration(segmentSize: number): number {
-    // Rough estimate: 128kbps MP3 = ~128000 bits/second = 16000 bytes/second
-    // This is just an estimate - real duration would require parsing MP3 headers
-    const estimatedBytesPerSecond = 16000;
+  private estimateSegmentDuration(segmentSize: number, fileInfo: AudioFileInfo): number {
+    // Use file info to make better duration estimate if available
+    if (fileInfo.duration > 0 && fileInfo.audioDataSize > 0) {
+      const bytesPerSecond = fileInfo.audioDataSize / fileInfo.duration;
+      return segmentSize / bytesPerSecond;
+    }
+
+    // Fallback: rough estimate based on average bitrate or assume 128kbps
+    const estimatedBytesPerSecond = fileInfo.averageBitrate
+      ? (fileInfo.averageBitrate * 1000) / 8
+      : 16000; // 128kbps default
+
     return segmentSize / estimatedBytesPerSecond;
   }
 
   private buildSegmentUrl(start: number, end: number, index: number): string {
     const baseUrlPrefix = this.baseUrl ? `/${this.baseUrl}` : '';
-    return `${baseUrlPrefix}/${start}/${end}/${this.fileName}${this.padNumber(index, 3)}.mp3`;
+    // Use the detected format from fileInfo, or fall back to file extension
+    const ext = this.fileInfo?.format || path.extname(this.filePath).toLowerCase().slice(1) || 'mp3';
+    return `${baseUrlPrefix}/${start}/${end}/${this.fileName}${this.padNumber(index, 3)}.${ext}`;
   }
 
   private calculateSegmentSize(segmentIndex: number): number {

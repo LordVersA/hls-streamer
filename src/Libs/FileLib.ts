@@ -1,5 +1,8 @@
 import fs from 'node:fs';
-import { Mp3FileInfo, Mp3FrameInfo } from '../Interfaces/HlsStreamer';
+import { Mp3FileInfo, Mp3FrameInfo, AudioFileInfo } from '../Interfaces/HlsStreamer';
+import { ParserFactory } from '../Parsers/ParserFactory';
+import { FormatDetector } from './FormatDetector';
+import { AudioFormat } from '../Parsers/IAudioParser';
 
 interface Id3Offsets {
   startOffset: number;
@@ -191,6 +194,7 @@ export class FileLib {
 
   /**
    * Load MP3 file from disk and return metadata
+   * @deprecated Use analyzeAudioFile instead
    */
   static async analyzeMP3File(filePath: string): Promise<Mp3FileInfo> {
     const [buffer, stat] = await Promise.all([
@@ -199,6 +203,68 @@ export class FileLib {
     ]);
 
     return this.analyzeMP3Buffer(buffer, { fileSize: stat.size });
+  }
+
+  /**
+   * Analyze audio file (supports all formats)
+   * @param filePath Path to audio file
+   * @param format Optional format override (auto-detected if not provided)
+   * @returns Audio file metadata
+   */
+  static async analyzeAudioFile(filePath: string, format?: AudioFormat): Promise<AudioFileInfo> {
+    const [buffer, stat] = await Promise.all([
+      fs.promises.readFile(filePath),
+      fs.promises.stat(filePath)
+    ]);
+
+    const opts: { fileSize: number; filePath: string; format?: AudioFormat } = {
+      fileSize: stat.size,
+      filePath
+    };
+
+    if (format !== undefined) {
+      opts.format = format;
+    }
+
+    return this.analyzeAudioBuffer(buffer, opts);
+  }
+
+  /**
+   * Analyze audio buffer (supports all formats)
+   * @param buffer Audio file buffer
+   * @param opts Options including fileSize, filePath for format detection, and format override
+   * @returns Audio file metadata
+   */
+  static analyzeAudioBuffer(
+    buffer: Buffer,
+    opts: { fileSize?: number; filePath?: string; format?: AudioFormat } = {}
+  ): AudioFileInfo {
+    let parser;
+
+    // Try format override first
+    if (opts.format) {
+      parser = ParserFactory.getParser(opts.format);
+      if (!parser) {
+        throw new Error(`Unsupported format: ${opts.format}`);
+      }
+    }
+
+    // Try detection from file path
+    if (!parser && opts.filePath) {
+      parser = ParserFactory.getParserByExtension(opts.filePath);
+    }
+
+    // Try detection from buffer content
+    if (!parser) {
+      parser = ParserFactory.detectParser(buffer);
+    }
+
+    if (!parser) {
+      throw new Error('Could not detect audio format');
+    }
+
+    const analyzeOpts = opts.fileSize !== undefined ? { fileSize: opts.fileSize } : {};
+    return parser.analyze(buffer, analyzeOpts);
   }
 
   private static calculateFrameLength(frame: ParsedFrameHeader): number {

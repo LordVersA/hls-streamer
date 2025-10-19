@@ -1,8 +1,10 @@
+import { AudioFormat } from '../Parsers/IAudioParser';
+
 /**
  * Configuration options for HLS streamer
  */
 export interface HlsStreamerOptions {
-  /** Path to the MP3 file */
+  /** Path to the audio file (supports: MP3, AAC, M4A, OGG, FLAC, WAV) */
   filePath: string;
   /** Segment size in KB (default: 512) */
   segmentSizeKB?: number;
@@ -12,6 +14,8 @@ export interface HlsStreamerOptions {
   baseUrl?: string;
   /** Enable smaller initial segments for faster startup */
   enableFastStart?: boolean;
+  /** Override auto-detected format (optional) */
+  format?: AudioFormat;
 }
 
 /**
@@ -26,10 +30,11 @@ export interface SegmentInfo {
   duration: number;
 }
 
+// Re-export new parser types for public API
+export type { AudioFormat, AudioFrameInfo, AudioFileInfo } from '../Parsers/IAudioParser';
+
 /**
- * MP3 file metadata
- */
-/**
+ * @deprecated Use AudioFrameInfo instead (Mp3FrameInfo kept for backwards compatibility)
  * Parsed MP3 frame details used for alignment and duration calculations
  */
 export interface Mp3FrameInfo {
@@ -50,10 +55,11 @@ export interface Mp3FrameInfo {
   /** Bitrate of the frame in kbps */
   bitrate: number;
   /** Padding flag from the frame header */
-  padding: 0 | 1;
+  padding?: 0 | 1;
 }
 
 /**
+ * @deprecated Use AudioFileInfo instead (Mp3FileInfo kept for backwards compatibility)
  * MP3 file metadata
  */
 export interface Mp3FileInfo {

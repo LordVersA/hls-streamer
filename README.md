@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/%3C%2F%3E-TypeScript-%230074c1.svg)](https://www.typescriptlang.org/)
 
-HLS Streamer turns any MP3 into an HTTP Live Streaming (HLS) playlist on the fly. It analyses the source audio in-memory, builds frame-aligned byte ranges, and streams them without temporary files, native bindings, or external binaries like ffmpeg.
+HLS Streamer turns any audio file (MP3, AAC, M4A, OGG Vorbis, FLAC, WAV) into an HTTP Live Streaming (HLS) playlist on the fly. It analyses the source audio in-memory, builds frame-aligned byte ranges, and streams them without temporary files, native bindings, or external binaries like ffmpeg.
 
 ---
 
@@ -20,29 +20,32 @@ HLS Streamer turns any MP3 into an HTTP Live Streaming (HLS) playlist on the fly
 
 ## Why HLS Streamer?
 
-- **Zero dependencies** – no shared libraries, no ffmpeg, no native compilation. Drop it into Docker, serverless, or edge runtimes.
-- **Accurate segments** – real MP3 frame parsing provides true durations, `#EXTINF` metadata, and target durations that match playback.
-- **Frame-aligned byte ranges** – every segment begins and ends on verified MP3 frame boundaries, preventing pops and clipped audio.
-- **No temp files** – streams straight from the source MP3 using byte-range reads.
+- **Multi-format support** – handles MP3, AAC, M4A, OGG Vorbis, FLAC, and WAV with automatic format detection.
+- **Zero dependencies** – no shared libraries, no ffmpeg, no native compilation. Pure TypeScript parsers for all formats. Drop it into Docker, serverless, or edge runtimes.
+- **Accurate segments** – real audio frame/packet parsing provides true durations, `#EXTINF` metadata, and target durations that match playback.
+- **Frame-aligned byte ranges** – every segment begins and ends on verified frame/packet boundaries, preventing pops and clipped audio.
+- **No temp files** – streams straight from the source audio file using byte-range reads.
 - **Fast-start aware** – optional smaller first segments improve startup latency for constrained networks.
 - **TypeScript first** – authored in TypeScript with full type definitions for your tooling and IDEs.
 
 ## How It Works
 
-1. **Metadata analysis** – the package inspects ID3v2/ID3v1 tags, parses MP3 frame headers, and produces a frame table with offsets, durations, and bitrates.
-2. **Segment planning** – segment boundaries are calculated from the frame table so each segment contains whole frames while matching your target sizes.
-3. **Playlist generation** – `createM3U8()` emits an `#EXTM3U` playlist with accurate `#EXTINF` entries and `#EXT-X-TARGETDURATION` derived from the longest segment.
-4. **On-demand byte ranges** – `getFileBuffer(start, end)` streams the exact bytes for a segment without reading the entire file into memory.
+1. **Format detection** – automatically detects audio format from file content (magic bytes) or extension, with optional manual override.
+2. **Metadata analysis** – format-specific parsers extract metadata (ID3/Vorbis comments/etc.), parse frame/packet headers, and produce a frame table with offsets, durations, and bitrates.
+3. **Segment planning** – segment boundaries are calculated from the frame table so each segment contains whole frames/packets while matching your target sizes.
+4. **Playlist generation** – `createM3U8()` emits an `#EXTM3U` playlist with accurate `#EXTINF` entries and `#EXT-X-TARGETDURATION` derived from the longest segment.
+5. **On-demand byte ranges** – `getFileBuffer(start, end)` streams the exact bytes for a segment without reading the entire file into memory.
 
 ```
-┌─────────────┐        ┌────────────────┐        ┌────────────────┐
-│  MP3 Source │ ─────▶ │ Frame Analyzer │ ─────▶ │ Segment Planner│
-└─────────────┘        └────────────────┘        └────────┬───────┘
-                                                            │
-                                                            ▼
-                                               ┌──────────────────────┐
-                                               │ HLS Playlist & Bytes │
-                                               └──────────────────────┘
+┌──────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌──────────────────────┐
+│ Audio Source │ ──▶ │ Format Detector │ ──▶ │ Format Parser   │ ──▶ │ Segment Planner      │
+│ (any format) │     │ (magic bytes)   │     │ (MP3/AAC/etc.)  │     │ (frame-aligned)      │
+└──────────────┘     └─────────────────┘     └─────────────────┘     └──────────┬───────────┘
+                                                                                  │
+                                                                                  ▼
+                                                                     ┌──────────────────────┐
+                                                                     │ HLS Playlist & Bytes │
+                                                                     └──────────────────────┘
 ```
 
 ## Quick Start
@@ -50,12 +53,14 @@ HLS Streamer turns any MP3 into an HTTP Live Streaming (HLS) playlist on the fly
 ```ts
 import { HlsStreamer } from 'hls-streamer';
 
+// Works with any supported format - auto-detected!
 const streamer = new HlsStreamer({
-  filePath: '/media/library/song.mp3',
+  filePath: '/media/library/song.mp3', // or .aac, .m4a, .ogg, .flac, .wav
   segmentSizeKB: 512,
   fileName: 'track',
   baseUrl: 'audio/stream/session-42',
   enableFastStart: true,
+  // format: 'mp3' // optional: override auto-detection
 });
 
 const playlist = await streamer.createM3U8();
@@ -124,19 +129,31 @@ Generated playlists follow the pattern below:
 
 | Option              | Type      | Default | Description |
 | ------------------- | --------- | ------- | ----------- |
-| `filePath`          | `string`  | —       | Absolute or relative path to the MP3 file. |
+| `filePath`          | `string`  | —       | Absolute or relative path to the audio file. Supports: MP3, AAC, M4A, OGG, FLAC, WAV. |
 | `segmentSizeKB`     | `number`  | `512`   | Target segment size in kilobytes. Fast-start mode splits the first two segments into quarters/halves of this value. |
 | `fileName`          | `string`  | `"file"` | Base name used in generated segment URLs (the index is appended automatically). |
 | `baseUrl`           | `string`  | `""`   | URL prefix inserted before each segment path. Useful when mounting under a route or CDN prefix. |
 | `enableFastStart`   | `boolean` | `false` | When true, the first two segments are smaller to reduce initial buffering time. |
+| `format`            | `AudioFormat` | auto-detect | Optional format override ('mp3', 'aac', 'm4a', 'ogg', 'flac', 'wav'). Auto-detected from file if not specified. |
 
 ### API Surface
 
 - `createM3U8(): Promise<string>` – Returns a full playlist with frame-accurate durations.
-- `getFileBuffer(start: number, end: number): Promise<Buffer>` – Streams a byte range from the MP3.
+- `getFileBuffer(start: number, end: number): Promise<Buffer>` – Streams a byte range from the audio file.
 - `getSegmentDuration(index: number): Promise<number>` – Reads the cached segment table to return the duration of a segment in seconds.
 
-Custom error classes are exported to help with error handling: `FileNotFoundError`, `InvalidFileError`, `InvalidRangeError`, and `InvalidParameterError`.
+Custom error classes are exported to help with error handling: `FileNotFoundError`, `InvalidFileError`, `InvalidRangeError`, `InvalidParameterError`, and `UnsupportedFormatError`.
+
+### Supported Formats
+
+| Format | Extensions | Container | Codec | Frame Parsing |
+|--------|-----------|-----------|-------|---------------|
+| **MP3** | `.mp3` | — | MPEG-1/2 Layer III | ✅ Full frame table |
+| **AAC** | `.aac` | ADTS | AAC | ✅ ADTS frames |
+| **M4A** | `.m4a`, `.m4b` | MP4 | AAC | ✅ MP4 box structure |
+| **OGG** | `.ogg`, `.oga` | OGG | Vorbis | ✅ OGG pages |
+| **FLAC** | `.flac` | — | FLAC | ✅ FLAC frames |
+| **WAV** | `.wav` | RIFF | PCM | ⚠️ Synthetic 1-second frames |
 
 ## Playlist Anatomy
 
@@ -160,11 +177,16 @@ Custom error classes are exported to help with error handling: `FileNotFoundErro
 
 ## Operational Tips
 
-- **Caching** – Construct the streamer once per unique MP3 and reuse it. Segment planning caches the metadata, so repeated calls to `createM3U8()` or `getSegmentDuration()` are cheap.
+- **Caching** – Construct the streamer once per unique audio file and reuse it. Segment planning caches the metadata, so repeated calls to `createM3U8()` or `getSegmentDuration()` are cheap.
 - **CDN friendliness** – Because segment URLs are deterministic byte ranges, edge caches can serve them efficiently. Configure consistent caching headers (e.g. `Cache-Control: public, max-age=86400`).
-- **Serverless** – The zero-dependency design works well in Lambda/Cloud Functions. For large MP3s, prefer streaming reads (`getFileBuffer`) instead of loading entire files into memory.
+- **Serverless** – The zero-dependency design works well in Lambda/Cloud Functions. For large files, prefer streaming reads (`getFileBuffer`) instead of loading entire files into memory.
 - **Monitoring** – Log segment `start`/`end` pairs and durations to correlate playback issues with specific byte ranges or frame parsing warnings.
-- **Troubleshooting** – For corrupted MP3s, inspect `FileLib.analyzeMP3File()` (available internally) to review parsing warnings and ID3 metadata.
+- **Troubleshooting** – For corrupted files, inspect `FileLib.analyzeAudioFile()` to review parsing warnings and format-specific metadata.
+- **Format selection** – All formats work seamlessly with HLS, but consider:
+  - **MP3/AAC/M4A**: Best compatibility with HLS players
+  - **FLAC**: Lossless quality but larger segments
+  - **OGG**: Open-source, good compression
+  - **WAV**: Uncompressed, very large segments (consider smaller `segmentSizeKB`)
 
 ## Development
 
@@ -189,6 +211,44 @@ To explore the example playlist generator, see `example/test-hls-generation.js` 
 ## Contributing
 
 Contributions are welcome! Please open an issue to discuss substantial changes before submitting a pull request. Make sure `npm test -- --runInBand --watchman=false` and `npm run build` pass prior to filing the PR.
+
+---
+
+## Version 3.0.0 Breaking Changes
+
+This major release adds multi-format support with pure TypeScript parsers. While most code remains backward compatible, please note:
+
+### What Changed
+- **New formats**: Added AAC, M4A, OGG Vorbis, FLAC, and WAV support
+- **Format detection**: Files are now validated against all supported formats, not just MP3
+- **Error types**: `InvalidFileError` for non-MP3 files is now `UnsupportedFormatError` for unsupported formats
+- **Internal architecture**: MP3 parsing refactored into modular `Parsers/` directory
+
+### Migration Guide
+```typescript
+// v2.x - Only MP3 supported
+const streamer = new HlsStreamer({ filePath: 'song.mp3' });
+
+// v3.x - All formats work the same way!
+const streamer = new HlsStreamer({ filePath: 'song.mp3' }); // ✅ Still works
+const streamer = new HlsStreamer({ filePath: 'song.ogg' }); // ✅ Now supported
+const streamer = new HlsStreamer({ filePath: 'song.flac' }); // ✅ Now supported
+
+// Error handling update
+try {
+  new HlsStreamer({ filePath: 'document.pdf' });
+} catch (err) {
+  // v2.x: InvalidFileError
+  // v3.x: UnsupportedFormatError
+}
+```
+
+### Deprecated APIs
+- `Mp3FileInfo` → Use `AudioFileInfo` (backward compatible, but deprecated)
+- `Mp3FrameInfo` → Use `AudioFrameInfo` (backward compatible, but deprecated)
+- `FileLib.analyzeMP3File()` → Use `FileLib.analyzeAudioFile()` (old method still works)
+
+All deprecated APIs remain functional for backward compatibility but will be removed in v4.0.0.
 
 ---
 

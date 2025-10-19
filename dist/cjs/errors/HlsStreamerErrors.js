@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.InvalidParameterError = exports.InvalidRangeError = exports.InvalidFileError = exports.FileNotFoundError = exports.HlsStreamerError = void 0;
+exports.UnsupportedFormatError = exports.InvalidParameterError = exports.InvalidRangeError = exports.InvalidFileError = exports.FileNotFoundError = exports.HlsStreamerError = void 0;
 class HlsStreamerError extends Error {
     constructor(message) {
         super(message);
@@ -36,4 +36,11 @@ class InvalidParameterError extends HlsStreamerError {
     }
 }
 exports.InvalidParameterError = InvalidParameterError;
+class UnsupportedFormatError extends HlsStreamerError {
+    constructor(format) {
+        super(`Unsupported audio format: ${format}`);
+        this.name = 'UnsupportedFormatError';
+    }
+}
+exports.UnsupportedFormatError = UnsupportedFormatError;
 //# sourceMappingURL=HlsStreamerErrors.js.map

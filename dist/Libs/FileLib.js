@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { ParserFactory } from '../Parsers/ParserFactory';
 export class FileLib {
     static getFileSizeInBytes(buffer) {
         if (Buffer.isBuffer(buffer)) {
@@ -114,6 +115,40 @@ export class FileLib {
             fs.promises.stat(filePath)
         ]);
         return this.analyzeMP3Buffer(buffer, { fileSize: stat.size });
+    }
+    static async analyzeAudioFile(filePath, format) {
+        const [buffer, stat] = await Promise.all([
+            fs.promises.readFile(filePath),
+            fs.promises.stat(filePath)
+        ]);
+        const opts = {
+            fileSize: stat.size,
+            filePath
+        };
+        if (format !== undefined) {
+            opts.format = format;
+        }
+        return this.analyzeAudioBuffer(buffer, opts);
+    }
+    static analyzeAudioBuffer(buffer, opts = {}) {
+        let parser;
+        if (opts.format) {
+            parser = ParserFactory.getParser(opts.format);
+            if (!parser) {
+                throw new Error(`Unsupported format: ${opts.format}`);
+            }
+        }
+        if (!parser && opts.filePath) {
+            parser = ParserFactory.getParserByExtension(opts.filePath);
+        }
+        if (!parser) {
+            parser = ParserFactory.detectParser(buffer);
+        }
+        if (!parser) {
+            throw new Error('Could not detect audio format');
+        }
+        const analyzeOpts = opts.fileSize !== undefined ? { fileSize: opts.fileSize } : {};
+        return parser.analyze(buffer, analyzeOpts);
     }
     static calculateFrameLength(frame) {
         if (frame.layer === 1) {

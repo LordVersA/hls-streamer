@@ -13,4 +13,7 @@ export declare class InvalidRangeError extends HlsStreamerError {
 export declare class InvalidParameterError extends HlsStreamerError {
     constructor(parameter: string, value: any);
 }
+export declare class UnsupportedFormatError extends HlsStreamerError {
+    constructor(format: string);
+}
 //# sourceMappingURL=HlsStreamerErrors.d.ts.map

@@ -21,6 +21,7 @@ exports.HlsStreamer = void 0;
 const node_fs_1 = __importDefault(require("node:fs"));
 const node_path_1 = __importDefault(require("node:path"));
 const FileLib_1 = require("./Libs/FileLib");
+const FormatDetector_1 = require("./Libs/FormatDetector");
 const HlsStreamerErrors_1 = require("./errors/HlsStreamerErrors");
 class HlsStreamer {
     constructor(options) {
@@ -54,6 +55,12 @@ class HlsStreamer {
             writable: true,
             value: void 0
         });
+        Object.defineProperty(this, "formatOverride", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: void 0
+        });
         Object.defineProperty(this, "fileInfo", {
             enumerable: true,
             configurable: true,
@@ -67,12 +74,13 @@ class HlsStreamer {
             value: void 0
         });
         this.validateOptions(options);
-        this.validateFile(options.filePath);
+        this.validateFile(options.filePath, options.format);
         this.filePath = options.filePath;
         this.segmentSize = (options.segmentSizeKB ?? 512) * 1024;
         this.fileName = options.fileName ?? "file";
         this.baseUrl = options.baseUrl ?? "";
         this.enableFastStart = options.enableFastStart ?? false;
+        this.formatOverride = options.format || undefined;
     }
     validateOptions(options) {
         if (!options.filePath || typeof options.filePath !== 'string') {
@@ -86,7 +94,7 @@ class HlsStreamer {
             throw new HlsStreamerErrors_1.InvalidParameterError('fileName', options.fileName);
         }
     }
-    validateFile(filePath) {
+    validateFile(filePath, format) {
         if (!node_fs_1.default.existsSync(filePath)) {
             throw new HlsStreamerErrors_1.FileNotFoundError(filePath);
         }
@@ -94,14 +102,22 @@ class HlsStreamer {
         if (!stat.isFile()) {
             throw new HlsStreamerErrors_1.InvalidFileError('Path is not a file');
         }
-        const ext = node_path_1.default.extname(filePath).toLowerCase();
-        if (ext !== '.mp3') {
-            throw new HlsStreamerErrors_1.InvalidFileError('Only MP3 files are supported');
+        if (format) {
+            const supportedFormats = ['mp3', 'aac', 'm4a', 'ogg', 'flac', 'wav'];
+            if (!supportedFormats.includes(format.toLowerCase())) {
+                throw new HlsStreamerErrors_1.UnsupportedFormatError(format);
+            }
+        }
+        else {
+            if (!FormatDetector_1.FormatDetector.isSupportedExtension(filePath)) {
+                const ext = node_path_1.default.extname(filePath);
+                throw new HlsStreamerErrors_1.UnsupportedFormatError(ext || 'unknown');
+            }
         }
     }
     async getFileInfo() {
         if (!this.fileInfo) {
-            const analysis = await FileLib_1.FileLib.analyzeMP3File(this.filePath);
+            const analysis = await FileLib_1.FileLib.analyzeAudioFile(this.filePath, this.formatOverride);
             if (analysis.size <= 0) {
                 throw new HlsStreamerErrors_1.InvalidFileError('File is empty');
             }
@@ -249,23 +265,30 @@ class HlsStreamer {
         let start = 0;
         targets.forEach((targetSize) => {
             const end = Math.min(totalBytes, start + targetSize);
-            const duration = this.estimateSegmentDuration(end - start);
+            const duration = this.estimateSegmentDuration(end - start, fileInfo);
             segments.push({ start, end, duration });
             start = end;
         });
         if (start < totalBytes) {
-            const duration = this.estimateSegmentDuration(totalBytes - start);
+            const duration = this.estimateSegmentDuration(totalBytes - start, fileInfo);
             segments.push({ start, end: totalBytes, duration });
         }
         return segments;
     }
-    estimateSegmentDuration(segmentSize) {
-        const estimatedBytesPerSecond = 16000;
+    estimateSegmentDuration(segmentSize, fileInfo) {
+        if (fileInfo.duration > 0 && fileInfo.audioDataSize > 0) {
+            const bytesPerSecond = fileInfo.audioDataSize / fileInfo.duration;
+            return segmentSize / bytesPerSecond;
+        }
+        const estimatedBytesPerSecond = fileInfo.averageBitrate
+            ? (fileInfo.averageBitrate * 1000) / 8
+            : 16000;
         return segmentSize / estimatedBytesPerSecond;
     }
     buildSegmentUrl(start, end, index) {
         const baseUrlPrefix = this.baseUrl ? `/${this.baseUrl}` : '';
-        return `${baseUrlPrefix}/${start}/${end}/${this.fileName}${this.padNumber(index, 3)}.mp3`;
+        const ext = this.fileInfo?.format || node_path_1.default.extname(this.filePath).toLowerCase().slice(1) || 'mp3';
+        return `${baseUrlPrefix}/${start}/${end}/${this.fileName}${this.padNumber(index, 3)}.${ext}`;
     }
     calculateSegmentSize(segmentIndex) {
         if (!this.enableFastStart) {

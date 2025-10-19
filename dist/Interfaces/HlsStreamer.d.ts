@@ -1,15 +1,18 @@
+import { AudioFormat } from '../Parsers/IAudioParser';
 export interface HlsStreamerOptions {
     filePath: string;
     segmentSizeKB?: number;
     fileName?: string;
     baseUrl?: string;
     enableFastStart?: boolean;
+    format?: AudioFormat;
 }
 export interface SegmentInfo {
     start: number;
     end: number;
     duration: number;
 }
+export type { AudioFormat, AudioFrameInfo, AudioFileInfo } from '../Parsers/IAudioParser';
 export interface Mp3FrameInfo {
     index: number;
     offset: number;
@@ -18,7 +21,7 @@ export interface Mp3FrameInfo {
     samples: number;
     sampleRate: number;
     bitrate: number;
-    padding: 0 | 1;
+    padding?: 0 | 1;
 }
 export interface Mp3FileInfo {
     size: number;
