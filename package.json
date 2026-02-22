@@ -1,6 +1,6 @@
 {
   "name": "hls-streamer",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Lightweight HLS streaming from audio files (MP3, AAC, M4A, OGG, FLAC, WAV) on demand, without temporary files or ffmpeg dependency",
   "main": "dist/index.js",
   "module": "dist/index.js",

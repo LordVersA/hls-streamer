@@ -54,7 +54,7 @@ describe('ParserFactory', () => {
     });
 
     it('should detect MP3 parser from frame sync', () => {
-      const buffer = Buffer.from([0xff, 0xe0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+      const buffer = Buffer.from([0xff, 0xfb, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
       const parser = ParserFactory.detectParser(buffer);
       expect(parser).toBeDefined();
       expect(parser?.getFormat()).toBe('mp3');
@@ -85,6 +85,15 @@ describe('ParserFactory', () => {
 
     it('should detect AAC parser from ADTS header', () => {
       const buffer = Buffer.from([0xff, 0xf1, 0x00, 0x00]);
+      const parser = ParserFactory.detectParser(buffer);
+      expect(parser).toBeDefined();
+      expect(parser?.getFormat()).toBe('aac');
+    });
+
+    it('should detect AAC parser from full ADTS frame buffer', () => {
+      const buffer = Buffer.alloc(16, 0);
+      buffer[0] = 0xff;
+      buffer[1] = 0xf1;
       const parser = ParserFactory.detectParser(buffer);
       expect(parser).toBeDefined();
       expect(parser?.getFormat()).toBe('aac');

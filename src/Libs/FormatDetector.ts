@@ -18,8 +18,22 @@ export class FormatDetector {
     if (buffer.toString('ascii', 0, 3) === 'ID3') {
       return 'mp3';
     }
-    if (buffer.length >= 2 && buffer[0] === 0xff && (buffer[1]! & 0xe0) === 0xe0) {
-      return 'mp3';
+    if (buffer.length >= 2 && buffer[0] === 0xff) {
+      const secondByte = buffer[1]!;
+
+      // AAC ADTS sync (12-bit 0xFFF with layer bits fixed to 00)
+      if ((secondByte & 0xf6) === 0xf0) {
+        return 'aac';
+      }
+
+      // MP3 sync with valid version/layer bits (avoid ADTS false positives)
+      if ((secondByte & 0xe0) === 0xe0) {
+        const versionBits = (secondByte >> 3) & 0x3;
+        const layerBits = (secondByte >> 1) & 0x3;
+        if (versionBits !== 0x1 && layerBits !== 0x0) {
+          return 'mp3';
+        }
+      }
     }
 
     // FLAC: 'fLaC' signature
@@ -46,11 +60,6 @@ export class FormatDetector {
       if (brand === 'M4A ' || brand === 'M4B ' || brand === 'mp42' || brand === 'isom') {
         return 'm4a';
       }
-    }
-
-    // AAC: ADTS header (0xFFF sync word)
-    if (buffer.length >= 2 && buffer[0] === 0xff && (buffer[1]! & 0xf6) === 0xf0) {
-      return 'aac';
     }
 
     return null;

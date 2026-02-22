@@ -110,8 +110,19 @@ class HlsStreamer {
         }
         else {
             if (!FormatDetector_1.FormatDetector.isSupportedExtension(filePath)) {
-                const ext = node_path_1.default.extname(filePath);
-                throw new HlsStreamerErrors_1.UnsupportedFormatError(ext || 'unknown');
+                const fd = node_fs_1.default.openSync(filePath, 'r');
+                try {
+                    const header = new Uint8Array(64);
+                    const bytesRead = node_fs_1.default.readSync(fd, header, 0, header.length, 0);
+                    const detectedFormat = FormatDetector_1.FormatDetector.detectFormat(Buffer.from(header.subarray(0, bytesRead)));
+                    if (!detectedFormat) {
+                        const ext = node_path_1.default.extname(filePath);
+                        throw new HlsStreamerErrors_1.UnsupportedFormatError(ext || 'unknown');
+                    }
+                }
+                finally {
+                    node_fs_1.default.closeSync(fd);
+                }
             }
         }
     }
@@ -167,7 +178,7 @@ class HlsStreamer {
         ];
         segments.forEach((segment, index) => {
             const segmentUrl = this.buildSegmentUrl(segment.start, segment.end, index);
-            m3u8.push(`#EXTINF:${segment.duration.toFixed(3)}`);
+            m3u8.push(`#EXTINF:${segment.duration.toFixed(3)},`);
             m3u8.push(segmentUrl);
         });
         m3u8.push('#EXT-X-ENDLIST');

@@ -50,22 +50,22 @@ export class Mp3Parser implements IAudioParser {
   }
 
   canParse(buffer: Buffer): boolean {
-    if (buffer.length < 10) {
+    if (buffer.length < 2) {
       return false;
     }
 
     // Check for ID3v2 tag
-    if (buffer.toString('ascii', 0, 3) === 'ID3') {
+    if (buffer.length >= 10 && buffer.toString('ascii', 0, 3) === 'ID3') {
       return true;
     }
 
     // Check for MP3 frame sync
-    if (buffer.length >= 2) {
-      const byte1 = buffer[0];
-      const byte2 = buffer[1];
-      if (byte1 === 0xff && (byte2! & 0xe0) === 0xe0) {
-        return true;
-      }
+    const byte1 = buffer[0];
+    const byte2 = buffer[1];
+    if (byte1 === 0xff && (byte2! & 0xe0) === 0xe0) {
+      const versionBits = (byte2! >> 3) & 0x3;
+      const layerBits = (byte2! >> 1) & 0x3;
+      return versionBits !== 0x1 && layerBits !== 0x0;
     }
 
     return false;

@@ -6,18 +6,18 @@ class Mp3Parser {
         return 'mp3';
     }
     canParse(buffer) {
-        if (buffer.length < 10) {
+        if (buffer.length < 2) {
             return false;
         }
-        if (buffer.toString('ascii', 0, 3) === 'ID3') {
+        if (buffer.length >= 10 && buffer.toString('ascii', 0, 3) === 'ID3') {
             return true;
         }
-        if (buffer.length >= 2) {
-            const byte1 = buffer[0];
-            const byte2 = buffer[1];
-            if (byte1 === 0xff && (byte2 & 0xe0) === 0xe0) {
-                return true;
-            }
+        const byte1 = buffer[0];
+        const byte2 = buffer[1];
+        if (byte1 === 0xff && (byte2 & 0xe0) === 0xe0) {
+            const versionBits = (byte2 >> 3) & 0x3;
+            const layerBits = (byte2 >> 1) & 0x3;
+            return versionBits !== 0x1 && layerBits !== 0x0;
         }
         return false;
     }

@@ -16,6 +16,7 @@ HLS Streamer turns any audio file (MP3, AAC, M4A, OGG Vorbis, FLAC, WAV) into an
 - [Playlist Anatomy](#playlist-anatomy)
 - [Operational Tips](#operational-tips)
 - [Development](#development)
+- [Release Notes](#release-notes)
 - [Support](#support)
 
 ## Why HLS Streamer?
@@ -211,6 +212,26 @@ To explore the example playlist generator, see `example/test-hls-generation.js` 
 ## Contributing
 
 Contributions are welcome! Please open an issue to discuss substantial changes before submitting a pull request. Make sure `npm test -- --runInBand --watchman=false` and `npm run build` pass prior to filing the PR.
+
+---
+
+## Release Notes
+
+### Version 3.1.0
+
+This release focuses on HLS compliance and format-detection reliability.
+
+#### Fixes
+- **HLS playlist compliance**: `#EXTINF` lines now include the required trailing comma.
+- **AAC ADTS detection**: ADTS buffers are no longer misclassified as MP3 by broad sync checks.
+- **Parser routing**: MP3 parser detection now validates MPEG version/layer bits to avoid false positives on AAC-like headers.
+- **Extensionless files**: constructor validation now accepts extensionless (or mislabeled) files when magic bytes identify a supported audio format.
+
+#### Quality improvements
+- Added regression tests for:
+  - `#EXTINF` comma compliance
+  - AAC-vs-MP3 sync ambiguity
+  - extensionless supported file handling
 
 ---
 

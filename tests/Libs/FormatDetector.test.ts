@@ -8,7 +8,7 @@ describe('FormatDetector', () => {
     });
 
     it('should detect MP3 format from frame sync', () => {
-      const buffer = Buffer.from([0xff, 0xe0, 0x00, 0x00]);
+      const buffer = Buffer.from([0xff, 0xfb, 0x00, 0x00]);
       expect(FormatDetector.detectFormat(buffer)).toBe('mp3');
     });
 
@@ -63,12 +63,8 @@ describe('FormatDetector', () => {
     });
 
     it('should detect AAC ADTS format', () => {
-      // Note: AAC ADTS (0xff 0xf*) overlaps with MP3 sync (0xff 0xe*)
-      // MP3 is checked first, so this test verifies the implementation priority
-      // A more specific AAC pattern would need additional validation beyond sync word
       const buffer = Buffer.from([0xff, 0xf1, 0x00, 0x00]);
-      // This will detect as mp3 due to broader MP3 sync pattern being checked first
-      expect(FormatDetector.detectFormat(buffer)).toBe('mp3');
+      expect(FormatDetector.detectFormat(buffer)).toBe('aac');
     });
 
     it('should return null for buffer too small', () => {

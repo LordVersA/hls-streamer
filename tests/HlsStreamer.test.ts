@@ -270,6 +270,19 @@ describe('HlsStreamer', () => {
       expect(m3u8).toContain('test000.mp3');
     });
 
+    it('should emit EXTINF lines with trailing comma for HLS compliance', async () => {
+      const m3u8 = await streamer.createM3U8();
+      const extinfLines = m3u8
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith('#EXTINF:'));
+
+      expect(extinfLines.length).toBeGreaterThan(0);
+      extinfLines.forEach((line) => {
+        expect(line.endsWith(',')).toBe(true);
+      });
+    });
+
     it('should handle empty baseUrl without double slashes', async () => {
       const streamerNoBase = new HlsStreamer({
         filePath: testMP3Path,
@@ -331,6 +344,21 @@ describe('HlsStreamer', () => {
   });
 
   describe('Edge cases', () => {
+    it('should support extensionless files when content is a supported format', async () => {
+      const extensionlessPath = path.join(testFilesDir, `extensionless-${Date.now()}`);
+      await MockMP3.createMockMP3File(extensionlessPath, 4096);
+
+      const streamer = new HlsStreamer({
+        filePath: extensionlessPath,
+        segmentSizeKB: 1
+      });
+
+      const m3u8 = await streamer.createM3U8();
+      expect(m3u8).toContain('#EXTM3U');
+
+      await MockMP3.cleanup(extensionlessPath);
+    });
+
     it('should handle very small MP3 file', async () => {
       const smallMP3Path = path.join(testFilesDir, 'small.mp3');
       await MockMP3.createMockMP3File(smallMP3Path, 2048); // 2KB file

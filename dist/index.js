@@ -90,8 +90,19 @@ export class HlsStreamer {
         }
         else {
             if (!FormatDetector.isSupportedExtension(filePath)) {
-                const ext = path.extname(filePath);
-                throw new UnsupportedFormatError(ext || 'unknown');
+                const fd = fs.openSync(filePath, 'r');
+                try {
+                    const header = new Uint8Array(64);
+                    const bytesRead = fs.readSync(fd, header, 0, header.length, 0);
+                    const detectedFormat = FormatDetector.detectFormat(Buffer.from(header.subarray(0, bytesRead)));
+                    if (!detectedFormat) {
+                        const ext = path.extname(filePath);
+                        throw new UnsupportedFormatError(ext || 'unknown');
+                    }
+                }
+                finally {
+                    fs.closeSync(fd);
+                }
             }
         }
     }
@@ -147,7 +158,7 @@ export class HlsStreamer {
         ];
         segments.forEach((segment, index) => {
             const segmentUrl = this.buildSegmentUrl(segment.start, segment.end, index);
-            m3u8.push(`#EXTINF:${segment.duration.toFixed(3)}`);
+            m3u8.push(`#EXTINF:${segment.duration.toFixed(3)},`);
             m3u8.push(segmentUrl);
         });
         m3u8.push('#EXT-X-ENDLIST');

@@ -72,10 +72,21 @@ export class HlsStreamer {
         throw new UnsupportedFormatError(format);
       }
     } else {
-      // Validate extension is supported
+      // Prefer fast extension validation, but allow extensionless or mislabeled files
+      // when their magic bytes are a supported audio format.
       if (!FormatDetector.isSupportedExtension(filePath)) {
-        const ext = path.extname(filePath);
-        throw new UnsupportedFormatError(ext || 'unknown');
+        const fd = fs.openSync(filePath, 'r');
+        try {
+          const header = new Uint8Array(64);
+          const bytesRead = fs.readSync(fd, header, 0, header.length, 0);
+          const detectedFormat = FormatDetector.detectFormat(Buffer.from(header.subarray(0, bytesRead)));
+          if (!detectedFormat) {
+            const ext = path.extname(filePath);
+            throw new UnsupportedFormatError(ext || 'unknown');
+          }
+        } finally {
+          fs.closeSync(fd);
+        }
       }
     }
   }
@@ -149,7 +160,7 @@ export class HlsStreamer {
 
     segments.forEach((segment, index) => {
       const segmentUrl = this.buildSegmentUrl(segment.start, segment.end, index);
-      m3u8.push(`#EXTINF:${segment.duration.toFixed(3)}`);
+      m3u8.push(`#EXTINF:${segment.duration.toFixed(3)},`);
       m3u8.push(segmentUrl);
     });
 
