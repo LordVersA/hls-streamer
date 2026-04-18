@@ -38,7 +38,7 @@ class InvalidParameterError extends HlsStreamerError {
 exports.InvalidParameterError = InvalidParameterError;
 class UnsupportedFormatError extends HlsStreamerError {
     constructor(format) {
-        super(`Unsupported audio format: ${format}`);
+        super(`Unsupported media format: ${format}`);
         this.name = 'UnsupportedFormatError';
     }
 }

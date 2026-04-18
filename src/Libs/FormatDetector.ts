@@ -1,4 +1,4 @@
-import { AudioFormat } from '../Parsers/IAudioParser';
+import { MediaFormat } from '../Parsers/IMediaParser';
 
 /**
  * Detects audio format from file buffer using magic bytes
@@ -9,7 +9,7 @@ export class FormatDetector {
    * @param buffer File buffer (at least first 16 bytes recommended)
    * @returns Detected format or null if unknown
    */
-  static detectFormat(buffer: Buffer): AudioFormat | null {
+  static detectFormat(buffer: Buffer): MediaFormat | null {
     if (buffer.length < 4) {
       return null;
     }
@@ -53,13 +53,30 @@ export class FormatDetector {
       return 'wav';
     }
 
-    // M4A/AAC: ftyp box (ISO Base Media File Format)
+    // ftyp box (ISO Base Media File Format) — M4A audio or MP4/MOV/M4V video
     if (buffer.length >= 12 && buffer.toString('ascii', 4, 8) === 'ftyp') {
-      // Check for M4A-specific brands
       const brand = buffer.toString('ascii', 8, 12);
-      if (brand === 'M4A ' || brand === 'M4B ' || brand === 'mp42' || brand === 'isom') {
+      // M4A/M4B audio brands
+      if (brand === 'M4A ' || brand === 'M4B ') {
         return 'm4a';
       }
+      // MOV brand
+      if (brand === 'qt  ') {
+        return 'mov';
+      }
+      // M4V brand
+      if (brand.startsWith('M4V')) {
+        return 'm4v';
+      }
+      // Generic ISOBMFF — check compatible brands for audio vs video
+      // brands like 'isom', 'mp41', 'mp42', 'avc1', 'iso2', etc. → mp4 video
+      // 'mp42' can be both; default to mp4 for generic brands
+      if (brand === 'mp42' || brand === 'isom' || brand === 'mp41' ||
+          brand === 'avc1' || brand === 'iso2' || brand === 'iso5' || brand === 'iso6') {
+        return 'mp4';
+      }
+      // Unknown ftyp brand — default to mp4
+      return 'mp4';
     }
 
     return null;
@@ -70,7 +87,7 @@ export class FormatDetector {
    * @param filePath File path or extension
    * @returns Detected format or null if unknown
    */
-  static detectFormatFromExtension(filePath: string): AudioFormat | null {
+  static detectFormatFromExtension(filePath: string): MediaFormat | null {
     const ext = filePath.toLowerCase().split('.').pop();
 
     switch (ext) {
@@ -88,6 +105,12 @@ export class FormatDetector {
         return 'flac';
       case 'wav':
         return 'wav';
+      case 'mp4':
+        return 'mp4';
+      case 'mov':
+        return 'mov';
+      case 'm4v':
+        return 'm4v';
       default:
         return null;
     }
@@ -97,7 +120,7 @@ export class FormatDetector {
    * Get supported file extensions
    */
   static getSupportedExtensions(): string[] {
-    return ['.mp3', '.aac', '.m4a', '.m4b', '.ogg', '.oga', '.flac', '.wav'];
+    return ['.mp3', '.aac', '.m4a', '.m4b', '.ogg', '.oga', '.flac', '.wav', '.mp4', '.mov', '.m4v'];
   }
 
   /**

@@ -32,9 +32,20 @@ export class FormatDetector {
         }
         if (buffer.length >= 12 && buffer.toString('ascii', 4, 8) === 'ftyp') {
             const brand = buffer.toString('ascii', 8, 12);
-            if (brand === 'M4A ' || brand === 'M4B ' || brand === 'mp42' || brand === 'isom') {
+            if (brand === 'M4A ' || brand === 'M4B ') {
                 return 'm4a';
             }
+            if (brand === 'qt  ') {
+                return 'mov';
+            }
+            if (brand.startsWith('M4V')) {
+                return 'm4v';
+            }
+            if (brand === 'mp42' || brand === 'isom' || brand === 'mp41' ||
+                brand === 'avc1' || brand === 'iso2' || brand === 'iso5' || brand === 'iso6') {
+                return 'mp4';
+            }
+            return 'mp4';
         }
         return null;
     }
@@ -55,12 +66,18 @@ export class FormatDetector {
                 return 'flac';
             case 'wav':
                 return 'wav';
+            case 'mp4':
+                return 'mp4';
+            case 'mov':
+                return 'mov';
+            case 'm4v':
+                return 'm4v';
             default:
                 return null;
         }
     }
     static getSupportedExtensions() {
-        return ['.mp3', '.aac', '.m4a', '.m4b', '.ogg', '.oga', '.flac', '.wav'];
+        return ['.mp3', '.aac', '.m4a', '.m4b', '.ogg', '.oga', '.flac', '.wav', '.mp4', '.mov', '.m4v'];
     }
     static isSupportedExtension(filePath) {
         const ext = '.' + filePath.toLowerCase().split('.').pop();

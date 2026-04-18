@@ -48,3 +48,4 @@ pids
 .env.production.local
 
 example
+CLAUDE.md

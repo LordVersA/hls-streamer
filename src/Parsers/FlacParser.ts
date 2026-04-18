@@ -1,12 +1,12 @@
-import { IAudioParser, AudioFileInfo, AudioFrameInfo, AudioFormat } from './IAudioParser';
+import { IMediaParser, MediaFileInfo, MediaFrameInfo, MediaFormat } from './IMediaParser';
 
 /**
  * FLAC (Free Lossless Audio Codec) format parser
  */
-export class FlacParser implements IAudioParser {
+export class FlacParser implements IMediaParser {
   private static readonly FLAC_SIGNATURE = 'fLaC';
 
-  getFormat(): AudioFormat {
+  getFormat(): MediaFormat {
     return 'flac';
   }
 
@@ -14,7 +14,7 @@ export class FlacParser implements IAudioParser {
     return buffer.length >= 4 && buffer.toString('ascii', 0, 4) === FlacParser.FLAC_SIGNATURE;
   }
 
-  analyze(buffer: Buffer, opts: { fileSize?: number } = {}): AudioFileInfo {
+  analyze(buffer: Buffer, opts: { fileSize?: number } = {}): MediaFileInfo {
     const warnings: string[] = [];
     const size = opts.fileSize ?? buffer.length;
 
@@ -93,7 +93,7 @@ export class FlacParser implements IAudioParser {
     const averageBitrate = duration > 0 ? (audioDataSize * 8) / duration / 1000 : undefined;
 
     // Parse FLAC frames for accurate segmentation
-    const frames: AudioFrameInfo[] = [];
+    const frames: MediaFrameInfo[] = [];
 
     if (audioDataOffset > 0 && audioDataOffset < buffer.length) {
       let frameOffset = audioDataOffset;
@@ -160,7 +160,7 @@ export class FlacParser implements IAudioParser {
       }
     }
 
-    const metadata: AudioFileInfo = {
+    const metadata: MediaFileInfo = {
       format: 'flac',
       size,
       duration,

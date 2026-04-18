@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { HlsStreamerOptions, SegmentInfo, AudioFileInfo } from "./Interfaces/HlsStreamer";
+import { HlsStreamerOptions, SegmentInfo, MediaFileInfo } from "./Interfaces/HlsStreamer";
 import { FileLib } from "./Libs/FileLib";
 import { FormatDetector } from "./Libs/FormatDetector";
 import {
@@ -22,7 +22,7 @@ export class HlsStreamer {
   private readonly baseUrl: string;
   private readonly enableFastStart: boolean;
   private readonly formatOverride: string | undefined;
-  private fileInfo?: AudioFileInfo;
+  private fileInfo?: MediaFileInfo;
   private segments: SegmentInfo[] | undefined;
 
   /**
@@ -67,7 +67,7 @@ export class HlsStreamer {
 
     // If format is specified, validate it
     if (format) {
-      const supportedFormats = ['mp3', 'aac', 'm4a', 'ogg', 'flac', 'wav'];
+      const supportedFormats = ['mp3', 'aac', 'm4a', 'ogg', 'flac', 'wav', 'mp4', 'mov', 'm4v'];
       if (!supportedFormats.includes(format.toLowerCase())) {
         throw new UnsupportedFormatError(format);
       }
@@ -91,9 +91,9 @@ export class HlsStreamer {
     }
   }
 
-  private async getFileInfo(): Promise<AudioFileInfo> {
+  private async getFileInfo(): Promise<MediaFileInfo> {
     if (!this.fileInfo) {
-      const analysis = await FileLib.analyzeAudioFile(this.filePath, this.formatOverride as any);
+      const analysis = await FileLib.analyzeMediaFile(this.filePath, this.formatOverride as any);
 
       if (analysis.size <= 0) {
         throw new InvalidFileError('File is empty');
@@ -150,13 +150,20 @@ export class HlsStreamer {
     const maxSegmentDuration = segments.reduce((max, segment) => Math.max(max, segment.duration), 0);
     const targetDurationSeconds = Math.max(1, Math.ceil(maxSegmentDuration || fileInfo.duration || 1));
 
+    const isVideo = !!fileInfo.initSegment;
     const m3u8 = [
       '#EXTM3U',
-      '#EXT-X-VERSION:6',
+      `#EXT-X-VERSION:${isVideo ? 7 : 6}`,
       '#EXT-X-PLAYLIST-TYPE:VOD',
       `#EXT-X-TARGETDURATION:${targetDurationSeconds}`,
       '#EXT-X-MEDIA-SEQUENCE:0',
     ];
+
+    if (isVideo && fileInfo.initSegment) {
+      const { offset, length } = fileInfo.initSegment;
+      const initUrl = this.buildSegmentUrl(offset, offset + length, -1, 'init');
+      m3u8.push(`#EXT-X-MAP:URI="${initUrl}"`);
+    }
 
     segments.forEach((segment, index) => {
       const segmentUrl = this.buildSegmentUrl(segment.start, segment.end, index);
@@ -199,7 +206,12 @@ export class HlsStreamer {
         const frame = frames[frameCursor]!;
         const nextBytes = consumedBytes + frame.length;
 
-        if (consumedBytes > 0 && nextBytes > targetBytes) {
+        // For video: break at keyframe boundary when we've accumulated enough bytes
+        if (consumedBytes > 0 && frame.keyFrame === true && consumedBytes >= targetBytes * 0.5) {
+          break;
+        }
+
+        if (consumedBytes > 0 && nextBytes > targetBytes && frame.keyFrame !== true) {
           break;
         }
 
@@ -249,7 +261,7 @@ export class HlsStreamer {
     return this.segments;
   }
 
-  private computeTargetSizes(fileInfo: AudioFileInfo): number[] {
+  private computeTargetSizes(fileInfo: MediaFileInfo): number[] {
     const totalBytes = fileInfo.audioDataSize || fileInfo.size;
     return this.computeTargetSizesFromBytes(totalBytes);
   }
@@ -273,7 +285,7 @@ export class HlsStreamer {
     return targets.length ? targets : [totalBytes];
   }
 
-  private buildSegmentsWithoutFrameTable(fileInfo: AudioFileInfo): SegmentInfo[] {
+  private buildSegmentsWithoutFrameTable(fileInfo: MediaFileInfo): SegmentInfo[] {
     const segments: SegmentInfo[] = [];
     const totalBytes = Math.max(fileInfo.size, fileInfo.audioDataSize);
 
@@ -299,7 +311,7 @@ export class HlsStreamer {
     return segments;
   }
 
-  private estimateSegmentDuration(segmentSize: number, fileInfo: AudioFileInfo): number {
+  private estimateSegmentDuration(segmentSize: number, fileInfo: MediaFileInfo): number {
     // Use file info to make better duration estimate if available
     if (fileInfo.duration > 0 && fileInfo.audioDataSize > 0) {
       const bytesPerSecond = fileInfo.audioDataSize / fileInfo.duration;
@@ -314,11 +326,11 @@ export class HlsStreamer {
     return segmentSize / estimatedBytesPerSecond;
   }
 
-  private buildSegmentUrl(start: number, end: number, index: number): string {
+  private buildSegmentUrl(start: number, end: number, index: number, nameSuffix?: string): string {
     const baseUrlPrefix = this.baseUrl ? `/${this.baseUrl}` : '';
-    // Use the detected format from fileInfo, or fall back to file extension
     const ext = this.fileInfo?.format || path.extname(this.filePath).toLowerCase().slice(1) || 'mp3';
-    return `${baseUrlPrefix}/${start}/${end}/${this.fileName}${this.padNumber(index, 3)}.${ext}`;
+    const name = nameSuffix !== undefined ? `${this.fileName}${nameSuffix}` : `${this.fileName}${this.padNumber(index, 3)}`;
+    return `${baseUrlPrefix}/${start}/${end}/${name}.${ext}`;
   }
 
   private calculateSegmentSize(segmentIndex: number): number {
@@ -339,6 +351,16 @@ export class HlsStreamer {
 
   private padNumber(value: number, padding: number): string {
     return value.toString().padStart(padding, '0');
+  }
+
+  /**
+   * Returns 'video' for MP4/MOV/M4V files, 'audio' for all other formats.
+   * Useful for consumers building route prefixes without parsing file extensions.
+   */
+  async getMediaType(): Promise<'audio' | 'video'> {
+    const fileInfo = await this.getFileInfo();
+    const videoFormats: string[] = ['mp4', 'mov', 'm4v'];
+    return videoFormats.includes(fileInfo.format) ? 'video' : 'audio';
   }
 
   /**

@@ -1,7 +1,7 @@
 {
   "name": "hls-streamer",
-  "version": "3.1.0",
-  "description": "Lightweight HLS streaming from audio files (MP3, AAC, M4A, OGG, FLAC, WAV) on demand, without temporary files or ffmpeg dependency",
+  "version": "4.0.0",
+  "description": "Lightweight HLS streaming from media files (MP3, AAC, M4A, OGG, FLAC, WAV, MP4, MOV, M4V) on demand, without temporary files or ffmpeg dependency",
   "main": "dist/index.js",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -41,6 +41,10 @@
     "ogg",
     "flac",
     "wav",
+    "mp4",
+    "mov",
+    "m4v",
+    "video",
     "audio",
     "http-live-streaming",
     "media",
@@ -49,7 +53,8 @@
     "typescript",
     "nodejs",
     "vorbis",
-    "audio-streaming"
+    "audio-streaming",
+    "video-streaming"
   ],
   "author": {
     "name": "LordVersA",

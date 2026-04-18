@@ -49,11 +49,11 @@ export class InvalidParameterError extends HlsStreamerError {
 }
 
 /**
- * Thrown when audio format is not supported
+ * Thrown when the media format is not supported
  */
 export class UnsupportedFormatError extends HlsStreamerError {
   constructor(format: string) {
-    super(`Unsupported audio format: ${format}`);
+    super(`Unsupported media format: ${format}`);
     this.name = 'UnsupportedFormatError';
   }
 }

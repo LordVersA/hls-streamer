@@ -1,4 +1,4 @@
-import { IAudioParser, AudioFileInfo, AudioFrameInfo, AudioFormat } from './IAudioParser';
+import { IMediaParser, MediaFileInfo, MediaFrameInfo, MediaFormat } from './IMediaParser';
 
 interface Id3Offsets {
   startOffset: number;
@@ -20,7 +20,7 @@ interface ParsedFrameHeader {
  * MP3 format parser with zero dependencies
  * Parses ID3 tags, MPEG frame headers, and builds accurate frame table
  */
-export class Mp3Parser implements IAudioParser {
+export class Mp3Parser implements IMediaParser {
   private static readonly BITRATE_INDEX: Record<1 | 2 | 25, Record<1 | 2 | 3, number[]>> = {
     1: {
       1: [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
@@ -45,7 +45,7 @@ export class Mp3Parser implements IAudioParser {
     25: [11025, 12000, 8000]
   };
 
-  getFormat(): AudioFormat {
+  getFormat(): MediaFormat {
     return 'mp3';
   }
 
@@ -71,7 +71,7 @@ export class Mp3Parser implements IAudioParser {
     return false;
   }
 
-  analyze(buffer: Buffer, opts: { fileSize?: number } = {}): AudioFileInfo {
+  analyze(buffer: Buffer, opts: { fileSize?: number } = {}): MediaFileInfo {
     const warnings: string[] = [];
     const size = opts.fileSize ?? buffer.length;
 
@@ -86,7 +86,7 @@ export class Mp3Parser implements IAudioParser {
     }
 
     const offsets = this.getId3Offsets(buffer);
-    const frames: AudioFrameInfo[] = [];
+    const frames: MediaFrameInfo[] = [];
     const payloadSize = Math.max(0, offsets.audioEnd - offsets.startOffset);
 
     let offset = offsets.startOffset;
@@ -153,7 +153,7 @@ export class Mp3Parser implements IAudioParser {
     if (frames.length === 0) {
       const estimatedDuration = buffer.length / 16000; // ~128kbps = 16000 bytes/sec
       warnings.push('Falling back to heuristic duration due to missing MP3 frames');
-      const metadata: AudioFileInfo = {
+      const metadata: MediaFileInfo = {
         format: 'mp3',
         size,
         duration: Math.max(0.001, estimatedDuration),
@@ -171,7 +171,7 @@ export class Mp3Parser implements IAudioParser {
     const duration = totalDuration;
     const averageBitrate = duration > 0 ? (totalAudioBytes * 8) / duration / 1000 : undefined;
 
-    const metadata: AudioFileInfo = {
+    const metadata: MediaFileInfo = {
       format: 'mp3',
       size,
       duration,

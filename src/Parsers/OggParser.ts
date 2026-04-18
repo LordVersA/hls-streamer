@@ -1,13 +1,13 @@
-import { IAudioParser, AudioFileInfo, AudioFrameInfo, AudioFormat } from './IAudioParser';
+import { IMediaParser, MediaFileInfo, MediaFrameInfo, MediaFormat } from './IMediaParser';
 
 /**
  * OGG Vorbis format parser
  * Parses OGG container and Vorbis audio codec
  */
-export class OggParser implements IAudioParser {
+export class OggParser implements IMediaParser {
   private static readonly OGG_SIGNATURE = 'OggS';
 
-  getFormat(): AudioFormat {
+  getFormat(): MediaFormat {
     return 'ogg';
   }
 
@@ -15,7 +15,7 @@ export class OggParser implements IAudioParser {
     return buffer.length >= 4 && buffer.toString('ascii', 0, 4) === OggParser.OGG_SIGNATURE;
   }
 
-  analyze(buffer: Buffer, opts: { fileSize?: number } = {}): AudioFileInfo {
+  analyze(buffer: Buffer, opts: { fileSize?: number } = {}): MediaFileInfo {
     const warnings: string[] = [];
     const size = opts.fileSize ?? buffer.length;
 
@@ -126,7 +126,7 @@ export class OggParser implements IAudioParser {
       : vorbisInfo?.bitrateNominal ? vorbisInfo.bitrateNominal / 1000 : undefined;
 
     // Create frames from OGG pages
-    const frames: AudioFrameInfo[] = [];
+    const frames: MediaFrameInfo[] = [];
     let previousGranule = 0n;
 
     for (let i = 0; i < pages.length; i++) {
@@ -154,7 +154,7 @@ export class OggParser implements IAudioParser {
       }
     }
 
-    const metadata: AudioFileInfo = {
+    const metadata: MediaFileInfo = {
       format: 'ogg',
       size,
       duration,

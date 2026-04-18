@@ -1,16 +1,16 @@
-import { IAudioParser, AudioFileInfo, AudioFrameInfo, AudioFormat } from './IAudioParser';
+import { IMediaParser, MediaFileInfo, MediaFrameInfo, MediaFormat } from './IMediaParser';
 
 /**
  * AAC/M4A format parser
  * Supports both raw ADTS AAC and M4A container (MP4 with AAC audio)
  */
-export class AacParser implements IAudioParser {
+export class AacParser implements IMediaParser {
   private static readonly SAMPLE_RATES = [
     96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050,
     16000, 12000, 11025, 8000, 7350, 0, 0, 0
   ];
 
-  getFormat(): AudioFormat {
+  getFormat(): MediaFormat {
     // Determine if ADTS or M4A
     return 'aac'; // Default to aac, will be overridden for m4a
   }
@@ -20,9 +20,13 @@ export class AacParser implements IAudioParser {
       return false;
     }
 
-    // Check for M4A (ftyp box)
+    // Check for M4A audio (ftyp box with audio-specific brands only)
     if (buffer.length >= 12 && buffer.toString('ascii', 4, 8) === 'ftyp') {
-      return true;
+      const brand = buffer.toString('ascii', 8, 12);
+      if (brand === 'M4A ' || brand === 'M4B ') {
+        return true;
+      }
+      return false;
     }
 
     // Check for ADTS AAC
@@ -33,7 +37,7 @@ export class AacParser implements IAudioParser {
     return false;
   }
 
-  analyze(buffer: Buffer, opts: { fileSize?: number } = {}): AudioFileInfo {
+  analyze(buffer: Buffer, opts: { fileSize?: number } = {}): MediaFileInfo {
     const size = opts.fileSize ?? buffer.length;
 
     // Check if M4A or raw ADTS
@@ -44,9 +48,9 @@ export class AacParser implements IAudioParser {
     }
   }
 
-  private analyzeAdts(buffer: Buffer, size: number): AudioFileInfo {
+  private analyzeAdts(buffer: Buffer, size: number): MediaFileInfo {
     const warnings: string[] = [];
-    const frames: AudioFrameInfo[] = [];
+    const frames: MediaFrameInfo[] = [];
 
     let offset = 0;
     let frameIndex = 0;
@@ -111,7 +115,7 @@ export class AacParser implements IAudioParser {
 
     const averageBitrate = totalDuration > 0 ? (totalBytes * 8) / totalDuration / 1000 : undefined;
 
-    const metadata: AudioFileInfo = {
+    const metadata: MediaFileInfo = {
       format: 'aac',
       size,
       duration: totalDuration,
@@ -138,7 +142,7 @@ export class AacParser implements IAudioParser {
     return metadata;
   }
 
-  private analyzeM4a(buffer: Buffer, size: number): AudioFileInfo {
+  private analyzeM4a(buffer: Buffer, size: number): MediaFileInfo {
     const warnings: string[] = [];
 
     // Parse MP4 boxes to find moov and mdat
@@ -187,7 +191,7 @@ export class AacParser implements IAudioParser {
     const averageBitrate = duration > 0 ? (audioDataSize * 8) / duration / 1000 : undefined;
 
     // For M4A, create synthetic frames based on typical AAC frame duration
-    const frames: AudioFrameInfo[] = [];
+    const frames: MediaFrameInfo[] = [];
     if (duration > 0 && sampleRate) {
       const samplesPerFrame = 1024;
       const frameDuration = samplesPerFrame / sampleRate;
@@ -209,7 +213,7 @@ export class AacParser implements IAudioParser {
       }
     }
 
-    const metadata: AudioFileInfo = {
+    const metadata: MediaFileInfo = {
       format: 'm4a',
       size,
       duration,

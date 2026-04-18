@@ -1,11 +1,11 @@
-import { IAudioParser, AudioFileInfo, AudioFormat } from './IAudioParser';
-export declare class OggParser implements IAudioParser {
+import { IMediaParser, MediaFileInfo, MediaFormat } from './IMediaParser';
+export declare class OggParser implements IMediaParser {
     private static readonly OGG_SIGNATURE;
-    getFormat(): AudioFormat;
+    getFormat(): MediaFormat;
     canParse(buffer: Buffer): boolean;
     analyze(buffer: Buffer, opts?: {
         fileSize?: number;
-    }): AudioFileInfo;
+    }): MediaFileInfo;
     private parseVorbisIdHeader;
 }
 //# sourceMappingURL=OggParser.d.ts.map

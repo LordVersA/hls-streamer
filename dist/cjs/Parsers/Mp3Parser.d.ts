@@ -1,12 +1,12 @@
-import { IAudioParser, AudioFileInfo, AudioFormat } from './IAudioParser';
-export declare class Mp3Parser implements IAudioParser {
+import { IMediaParser, MediaFileInfo, MediaFormat } from './IMediaParser';
+export declare class Mp3Parser implements IMediaParser {
     private static readonly BITRATE_INDEX;
     private static readonly SAMPLE_RATE_INDEX;
-    getFormat(): AudioFormat;
+    getFormat(): MediaFormat;
     canParse(buffer: Buffer): boolean;
     analyze(buffer: Buffer, opts?: {
         fileSize?: number;
-    }): AudioFileInfo;
+    }): MediaFileInfo;
     private calculateFrameLength;
     private getId3Offsets;
     private syncSafeInteger;

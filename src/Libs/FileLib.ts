@@ -1,8 +1,8 @@
 import fs from 'node:fs';
-import { Mp3FileInfo, Mp3FrameInfo, AudioFileInfo } from '../Interfaces/HlsStreamer';
+import { Mp3FileInfo, Mp3FrameInfo, MediaFileInfo } from '../Interfaces/HlsStreamer';
 import { ParserFactory } from '../Parsers/ParserFactory';
 import { FormatDetector } from './FormatDetector';
-import { AudioFormat } from '../Parsers/IAudioParser';
+import { MediaFormat } from '../Parsers/IMediaParser';
 
 interface Id3Offsets {
   startOffset: number;
@@ -206,18 +206,18 @@ export class FileLib {
   }
 
   /**
-   * Analyze audio file (supports all formats)
-   * @param filePath Path to audio file
+   * Analyze media file (supports all audio and video formats)
+   * @param filePath Path to media file
    * @param format Optional format override (auto-detected if not provided)
-   * @returns Audio file metadata
+   * @returns Media file metadata
    */
-  static async analyzeAudioFile(filePath: string, format?: AudioFormat): Promise<AudioFileInfo> {
+  static async analyzeMediaFile(filePath: string, format?: MediaFormat): Promise<MediaFileInfo> {
     const [buffer, stat] = await Promise.all([
       fs.promises.readFile(filePath),
       fs.promises.stat(filePath)
     ]);
 
-    const opts: { fileSize: number; filePath: string; format?: AudioFormat } = {
+    const opts: { fileSize: number; filePath: string; format?: MediaFormat } = {
       fileSize: stat.size,
       filePath
     };
@@ -226,19 +226,24 @@ export class FileLib {
       opts.format = format;
     }
 
-    return this.analyzeAudioBuffer(buffer, opts);
+    return this.analyzeMediaBuffer(buffer, opts);
+  }
+
+  /** @deprecated Use analyzeMediaFile instead */
+  static async analyzeAudioFile(filePath: string, format?: MediaFormat): Promise<MediaFileInfo> {
+    return this.analyzeMediaFile(filePath, format);
   }
 
   /**
-   * Analyze audio buffer (supports all formats)
-   * @param buffer Audio file buffer
+   * Analyze media buffer (supports all audio and video formats)
+   * @param buffer Media file buffer
    * @param opts Options including fileSize, filePath for format detection, and format override
-   * @returns Audio file metadata
+   * @returns Media file metadata
    */
-  static analyzeAudioBuffer(
+  static analyzeMediaBuffer(
     buffer: Buffer,
-    opts: { fileSize?: number; filePath?: string; format?: AudioFormat } = {}
-  ): AudioFileInfo {
+    opts: { fileSize?: number; filePath?: string; format?: MediaFormat } = {}
+  ): MediaFileInfo {
     let parser;
 
     // Try format override first
@@ -265,6 +270,14 @@ export class FileLib {
 
     const analyzeOpts = opts.fileSize !== undefined ? { fileSize: opts.fileSize } : {};
     return parser.analyze(buffer, analyzeOpts);
+  }
+
+  /** @deprecated Use analyzeMediaBuffer instead */
+  static analyzeAudioBuffer(
+    buffer: Buffer,
+    opts: { fileSize?: number; filePath?: string; format?: MediaFormat } = {}
+  ): MediaFileInfo {
+    return this.analyzeMediaBuffer(buffer, opts);
   }
 
   private static calculateFrameLength(frame: ParsedFrameHeader): number {

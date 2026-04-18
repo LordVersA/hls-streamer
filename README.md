@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/%3C%2F%3E-TypeScript-%230074c1.svg)](https://www.typescriptlang.org/)
 
-HLS Streamer turns any audio file (MP3, AAC, M4A, OGG Vorbis, FLAC, WAV) into an HTTP Live Streaming (HLS) playlist on the fly. It analyses the source audio in-memory, builds frame-aligned byte ranges, and streams them without temporary files, native bindings, or external binaries like ffmpeg.
+HLS Streamer converts audio and video files (MP3, AAC, M4A, OGG Vorbis, FLAC, WAV, MP4, MOV, M4V) into HTTP Live Streaming (HLS) playlists on the fly. It analyses the source file in-memory, builds frame-aligned byte ranges, and streams them without temporary files, native bindings, or external binaries like ffmpeg.
 
 ---
 
@@ -21,26 +21,27 @@ HLS Streamer turns any audio file (MP3, AAC, M4A, OGG Vorbis, FLAC, WAV) into an
 
 ## Why HLS Streamer?
 
-- **Multi-format support** – handles MP3, AAC, M4A, OGG Vorbis, FLAC, and WAV with automatic format detection.
+- **Multi-format support** – handles MP3, AAC, M4A, OGG Vorbis, FLAC, WAV, MP4, MOV, and M4V with automatic format detection.
+- **Audio + Video** – audio files produce standard HLS v6 playlists; video files produce HLS v7 fMP4 playlists with an `EXT-X-MAP` init segment and keyframe-aligned boundaries.
 - **Zero dependencies** – no shared libraries, no ffmpeg, no native compilation. Pure TypeScript parsers for all formats. Drop it into Docker, serverless, or edge runtimes.
-- **Accurate segments** – real audio frame/packet parsing provides true durations, `#EXTINF` metadata, and target durations that match playback.
-- **Frame-aligned byte ranges** – every segment begins and ends on verified frame/packet boundaries, preventing pops and clipped audio.
-- **No temp files** – streams straight from the source audio file using byte-range reads.
+- **Accurate segments** – real frame/packet parsing provides true durations, `#EXTINF` metadata, and target durations that match playback.
+- **Frame-aligned byte ranges** – every segment begins and ends on verified frame boundaries; video segments snap to keyframes to prevent decoding artifacts.
+- **No temp files** – streams straight from the source file using byte-range reads.
 - **Fast-start aware** – optional smaller first segments improve startup latency for constrained networks.
 - **TypeScript first** – authored in TypeScript with full type definitions for your tooling and IDEs.
 
 ## How It Works
 
-1. **Format detection** – automatically detects audio format from file content (magic bytes) or extension, with optional manual override.
-2. **Metadata analysis** – format-specific parsers extract metadata (ID3/Vorbis comments/etc.), parse frame/packet headers, and produce a frame table with offsets, durations, and bitrates.
-3. **Segment planning** – segment boundaries are calculated from the frame table so each segment contains whole frames/packets while matching your target sizes.
-4. **Playlist generation** – `createM3U8()` emits an `#EXTM3U` playlist with accurate `#EXTINF` entries and `#EXT-X-TARGETDURATION` derived from the longest segment.
-5. **On-demand byte ranges** – `getFileBuffer(start, end)` streams the exact bytes for a segment without reading the entire file into memory.
+1. **Format detection** – automatically detects format from file content (magic bytes / `ftyp` brand) or extension, with optional manual override.
+2. **Metadata analysis** – format-specific parsers extract frame/packet tables with offsets, durations, and (for video) keyframe markers.
+3. **Segment planning** – boundaries are calculated from the frame table so each segment contains whole frames while respecting your target size. Video segments snap to I-frame boundaries.
+4. **Playlist generation** – `createM3U8()` emits an `#EXTM3U` playlist. Audio files use HLS v6; video files use HLS v7 with `EXT-X-MAP` pointing to the `moov` init segment.
+5. **On-demand byte ranges** – `getFileBuffer(start, end)` reads only the bytes needed for a given segment or init segment.
 
 ```
 ┌──────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌──────────────────────┐
-│ Audio Source │ ──▶ │ Format Detector │ ──▶ │ Format Parser   │ ──▶ │ Segment Planner      │
-│ (any format) │     │ (magic bytes)   │     │ (MP3/AAC/etc.)  │     │ (frame-aligned)      │
+│ Media Source │ ──▶ │ Format Detector │ ──▶ │ Format Parser   │ ──▶ │ Segment Planner      │
+│ (any format) │     │ (magic bytes)   │     │ (MP3/MP4/etc.)  │     │ (frame/keyframe)     │
 └──────────────┘     └─────────────────┘     └─────────────────┘     └──────────┬───────────┘
                                                                                   │
                                                                                   ▼
@@ -54,25 +55,34 @@ HLS Streamer turns any audio file (MP3, AAC, M4A, OGG Vorbis, FLAC, WAV) into an
 ```ts
 import { HlsStreamer } from 'hls-streamer';
 
-// Works with any supported format - auto-detected!
-const streamer = new HlsStreamer({
+// Audio file — auto-detected
+const audioStreamer = new HlsStreamer({
   filePath: '/media/library/song.mp3', // or .aac, .m4a, .ogg, .flac, .wav
   segmentSizeKB: 512,
   fileName: 'track',
   baseUrl: 'audio/stream/session-42',
   enableFastStart: true,
-  // format: 'mp3' // optional: override auto-detection
 });
 
-const playlist = await streamer.createM3U8();
-console.log(playlist);
+const audioPlaylist = await audioStreamer.createM3U8();
 
-const firstSegmentBuffer = await streamer.getFileBuffer(0, 512 * 1024);
+// Video file — same API
+const videoStreamer = new HlsStreamer({
+  filePath: '/media/library/movie.mp4', // or .mov, .m4v
+  segmentSizeKB: 2048,
+  fileName: 'segment',
+  baseUrl: 'video/stream/session-42',
+});
+
+const videoPlaylist = await videoStreamer.createM3U8();
+
+// Detect media type at runtime
+const type = await videoStreamer.getMediaType(); // 'video' | 'audio'
 ```
 
 ## Serving Over HTTP
 
-Create playlists and segment endpoints with any HTTP framework. The example below shows an Express setup:
+The example below shows an Express setup that handles both audio and video:
 
 ```ts
 import express from 'express';
@@ -83,7 +93,7 @@ const app = express();
 app.get('/streams/:id/playlist.m3u8', async (req, res, next) => {
   try {
     const streamer = new HlsStreamer({
-      filePath: resolveAudioPath(req.params.id),
+      filePath: resolveMediaPath(req.params.id),
       baseUrl: `streams/${req.params.id}`,
       enableFastStart: true,
     });
@@ -98,14 +108,15 @@ app.get('/streams/:id/playlist.m3u8', async (req, res, next) => {
 app.get('/streams/:id/:start/:end/:filename', async (req, res, next) => {
   try {
     const streamer = new HlsStreamer({
-      filePath: resolveAudioPath(req.params.id),
+      filePath: resolveMediaPath(req.params.id),
       baseUrl: `streams/${req.params.id}`,
     });
 
     const start = Number(req.params.start);
     const end = Number(req.params.end);
+    const mediaType = await streamer.getMediaType();
 
-    res.type('audio/mpeg');
+    res.type(mediaType === 'video' ? 'video/mp4' : 'audio/mpeg');
     res.set('Accept-Ranges', 'bytes');
     res.send(await streamer.getFileBuffer(start, end));
   } catch (error) {
@@ -116,47 +127,59 @@ app.get('/streams/:id/:start/:end/:filename', async (req, res, next) => {
 
 ### Segment URL Contract
 
-Generated playlists follow the pattern below:
+Generated playlists follow this pattern:
 
 ```
-/{baseUrl}/{startByte}/{endByte}/{fileName}{index}.mp3
+/{baseUrl}/{startByte}/{endByte}/{fileName}{index}.{ext}
+```
+
+For video files, an additional init segment URL is emitted as `EXT-X-MAP`:
+
+```
+/{baseUrl}/{moovOffset}/{moovEnd}/{fileName}init.mp4
 ```
 
 - `startByte` is inclusive, `endByte` is exclusive.
 - `index` is zero-padded to three digits (`000`, `001`, ...).
-- Use the provided byte range as-is when serving `audio/mpeg` responses.
+- Serve the exact byte range from the original file — no transcoding needed.
 
 ## Configuration Reference
 
-| Option              | Type      | Default | Description |
-| ------------------- | --------- | ------- | ----------- |
-| `filePath`          | `string`  | —       | Absolute or relative path to the audio file. Supports: MP3, AAC, M4A, OGG, FLAC, WAV. |
-| `segmentSizeKB`     | `number`  | `512`   | Target segment size in kilobytes. Fast-start mode splits the first two segments into quarters/halves of this value. |
-| `fileName`          | `string`  | `"file"` | Base name used in generated segment URLs (the index is appended automatically). |
-| `baseUrl`           | `string`  | `""`   | URL prefix inserted before each segment path. Useful when mounting under a route or CDN prefix. |
-| `enableFastStart`   | `boolean` | `false` | When true, the first two segments are smaller to reduce initial buffering time. |
-| `format`            | `AudioFormat` | auto-detect | Optional format override ('mp3', 'aac', 'm4a', 'ogg', 'flac', 'wav'). Auto-detected from file if not specified. |
+| Option            | Type          | Default      | Description |
+| ----------------- | ------------- | ------------ | ----------- |
+| `filePath`        | `string`      | —            | Path to the media file. Supports: MP3, AAC, M4A, OGG, FLAC, WAV, MP4, MOV, M4V. |
+| `segmentSizeKB`   | `number`      | `512`        | Target segment size in kilobytes. |
+| `fileName`        | `string`      | `"file"`     | Base name for generated segment URLs. |
+| `baseUrl`         | `string`      | `""`         | URL prefix inserted before each segment path. |
+| `enableFastStart` | `boolean`     | `false`      | Smaller first two segments for faster playback start. |
+| `format`          | `MediaFormat` | auto-detect  | Optional override: `'mp3'`, `'aac'`, `'m4a'`, `'ogg'`, `'flac'`, `'wav'`, `'mp4'`, `'mov'`, `'m4v'`. |
 
 ### API Surface
 
-- `createM3U8(): Promise<string>` – Returns a full playlist with frame-accurate durations.
-- `getFileBuffer(start: number, end: number): Promise<Buffer>` – Streams a byte range from the audio file.
-- `getSegmentDuration(index: number): Promise<number>` – Reads the cached segment table to return the duration of a segment in seconds.
+- `createM3U8(): Promise<string>` – Full HLS playlist with frame-accurate durations. Audio → HLS v6; Video → HLS v7 + `EXT-X-MAP`.
+- `getFileBuffer(start: number, end: number): Promise<Buffer>` – Byte-range read from the source file (used for both segments and the init segment).
+- `getSegmentDuration(index: number): Promise<number>` – Duration in seconds for a specific segment.
+- `getMediaType(): Promise<'audio' | 'video'>` – Returns `'video'` for MP4/MOV/M4V, `'audio'` for everything else.
 
-Custom error classes are exported to help with error handling: `FileNotFoundError`, `InvalidFileError`, `InvalidRangeError`, `InvalidParameterError`, and `UnsupportedFormatError`.
+Custom error classes: `FileNotFoundError`, `InvalidFileError`, `InvalidRangeError`, `InvalidParameterError`, `UnsupportedFormatError`.
 
 ### Supported Formats
 
-| Format | Extensions | Container | Codec | Frame Parsing |
-|--------|-----------|-----------|-------|---------------|
-| **MP3** | `.mp3` | — | MPEG-1/2 Layer III | ✅ Full frame table |
-| **AAC** | `.aac` | ADTS | AAC | ✅ ADTS frames |
-| **M4A** | `.m4a`, `.m4b` | MP4 | AAC | ✅ MP4 box structure |
-| **OGG** | `.ogg`, `.oga` | OGG | Vorbis | ✅ OGG pages |
-| **FLAC** | `.flac` | — | FLAC | ✅ FLAC frames |
-| **WAV** | `.wav` | RIFF | PCM | ⚠️ Synthetic 1-second frames |
+| Format  | Extensions          | Container | Codec        | Frame Parsing                   |
+| ------- | ------------------- | --------- | ------------ | ------------------------------- |
+| **MP3** | `.mp3`              | —         | MPEG Layer 3 | ✅ Full frame table              |
+| **AAC** | `.aac`              | ADTS      | AAC          | ✅ ADTS frames                   |
+| **M4A** | `.m4a`, `.m4b`      | MP4       | AAC          | ✅ MP4 box structure             |
+| **OGG** | `.ogg`, `.oga`      | OGG       | Vorbis       | ✅ OGG pages                     |
+| **FLAC**| `.flac`             | —         | FLAC         | ✅ FLAC frames                   |
+| **WAV** | `.wav`              | RIFF      | PCM          | ⚠️ Synthetic 1-second frames    |
+| **MP4** | `.mp4`              | fMP4      | H.264/H.265  | ✅ ISOBMFF box parse + keyframes |
+| **MOV** | `.mov`              | QuickTime | H.264/H.265  | ✅ ISOBMFF box parse + keyframes |
+| **M4V** | `.m4v`              | MP4       | H.264/H.265  | ✅ ISOBMFF box parse + keyframes |
 
 ## Playlist Anatomy
+
+### Audio (HLS v6)
 
 ```m3u8
 #EXTM3U
@@ -172,36 +195,49 @@ Custom error classes are exported to help with error handling: `FileNotFoundErro
 #EXT-X-ENDLIST
 ```
 
-- `#EXT-X-TARGETDURATION` is rounded up from the longest real segment duration.
-- `#EXTINF` entries retain millisecond precision for smooth playback on strict clients.
-- Segment paths directly encode the byte ranges your route must return.
+### Video (HLS v7 fMP4)
+
+```m3u8
+#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-TARGETDURATION:4
+#EXT-X-MEDIA-SEQUENCE:0
+#EXT-X-MAP:URI="/video/session/0/28672/fileinit.mp4"
+#EXTINF:4.000,
+/video/session/28672/2125824/file000.mp4
+#EXTINF:3.967,
+/video/session/2125824/4194304/file001.mp4
+...
+#EXT-X-ENDLIST
+```
+
+- `EXT-X-MAP` points to the `moov` box (init segment) inside the original file — no remuxing.
+- Video segment boundaries are snapped to keyframes for seamless decoding.
+- `#EXTINF` retains millisecond precision for smooth playback.
 
 ## Operational Tips
 
-- **Caching** – Construct the streamer once per unique audio file and reuse it. Segment planning caches the metadata, so repeated calls to `createM3U8()` or `getSegmentDuration()` are cheap.
-- **CDN friendliness** – Because segment URLs are deterministic byte ranges, edge caches can serve them efficiently. Configure consistent caching headers (e.g. `Cache-Control: public, max-age=86400`).
-- **Serverless** – The zero-dependency design works well in Lambda/Cloud Functions. For large files, prefer streaming reads (`getFileBuffer`) instead of loading entire files into memory.
-- **Monitoring** – Log segment `start`/`end` pairs and durations to correlate playback issues with specific byte ranges or frame parsing warnings.
-- **Troubleshooting** – For corrupted files, inspect `FileLib.analyzeAudioFile()` to review parsing warnings and format-specific metadata.
-- **Format selection** – All formats work seamlessly with HLS, but consider:
-  - **MP3/AAC/M4A**: Best compatibility with HLS players
-  - **FLAC**: Lossless quality but larger segments
-  - **OGG**: Open-source, good compression
-  - **WAV**: Uncompressed, very large segments (consider smaller `segmentSizeKB`)
+- **Caching** – Construct the streamer once per unique file and reuse it. Segment planning caches metadata after the first call.
+- **Video segment size** – Use a larger `segmentSizeKB` (1024–4096) for video to avoid excessive HTTP requests. Audio works well at 512.
+- **CDN friendliness** – Segment URLs are deterministic byte ranges, making them ideal for edge caching. Use `Cache-Control: public, max-age=86400`.
+- **Serverless** – Zero-dependency design works in Lambda/Cloud Functions. `getFileBuffer` reads only the bytes needed, keeping memory usage low.
+- **Content-Type** – Serve audio segments as `audio/mpeg` (or the appropriate codec MIME type) and video segments as `video/mp4`. Use `getMediaType()` to branch at runtime.
+- **Troubleshooting** – Inspect `FileLib.analyzeMediaFile()` to review parsing warnings and format-specific metadata.
 
 ## Development
 
-Clone the repo, install dependencies, and run the usual scripts:
-
 ```bash
 npm install
-npm test -- --runInBand --watchman=false
+npm test
 npm run build
 ```
 
-The Jest flag `--watchman=false` avoids macOS sandbox issues when running in restricted environments.
+To run a single test file:
 
-To explore the example playlist generator, see `example/test-hls-generation.js` and the bundled `example/sample.mp3` fixture.
+```bash
+npx jest tests/Parsers/Mp4Parser.test.ts
+```
 
 ## Support
 
@@ -211,65 +247,64 @@ To explore the example playlist generator, see `example/test-hls-generation.js` 
 
 ## Contributing
 
-Contributions are welcome! Please open an issue to discuss substantial changes before submitting a pull request. Make sure `npm test -- --runInBand --watchman=false` and `npm run build` pass prior to filing the PR.
+Contributions are welcome! Please open an issue to discuss substantial changes before submitting a pull request. Make sure `npm test` and `npm run build` pass prior to filing the PR.
 
 ---
 
 ## Release Notes
 
-### Version 3.1.0
+### Version 4.0.0
 
-This release focuses on HLS compliance and format-detection reliability.
+Major release adding video support and completing the audio→media rename.
 
-#### Fixes
-- **HLS playlist compliance**: `#EXTINF` lines now include the required trailing comma.
-- **AAC ADTS detection**: ADTS buffers are no longer misclassified as MP3 by broad sync checks.
-- **Parser routing**: MP3 parser detection now validates MPEG version/layer bits to avoid false positives on AAC-like headers.
-- **Extensionless files**: constructor validation now accepts extensionless (or mislabeled) files when magic bytes identify a supported audio format.
+#### New Features
+- **Video support** – MP4, MOV, and M4V files are now fully supported via a pure-JS ISOBMFF (MP4 box) parser. No ffmpeg, no native bindings, no vendored libraries.
+- **HLS v7 fMP4 playlists** – video files produce `EXT-X-MAP` init segments and keyframe-aligned byte-range segments, fully compatible with Safari, Chrome, and HLS.js.
+- **Keyframe-aware segmentation** – video segment boundaries snap to I-frames, preventing decoding artifacts.
+- **`getMediaType()`** – new method returning `'audio' | 'video'` to simplify route/MIME-type logic.
+- **`MediaFormat` / `MediaFileInfo` / `MediaFrameInfo`** – public types renamed from `Audio*` to `Media*` to reflect the broader scope.
 
-#### Quality improvements
-- Added regression tests for:
-  - `#EXTINF` comma compliance
-  - AAC-vs-MP3 sync ambiguity
-  - extensionless supported file handling
+#### Breaking Changes (from v3)
+- `AudioFormat`, `AudioFileInfo`, `AudioFrameInfo`, `IAudioParser` are now **deprecated** aliases — they still compile but will be removed in v5.
+- `FileLib.analyzeAudioFile()` and `analyzeAudioBuffer()` are deprecated; use `analyzeMediaFile()` / `analyzeMediaBuffer()`.
+- `UnsupportedFormatError` message changed from `"Unsupported audio format"` to `"Unsupported media format"`.
+- `format` option type widened from `AudioFormat` to `MediaFormat` (superset — no change needed for existing callers).
+
+#### Migration Guide
+
+```typescript
+// v3.x
+import { AudioFormat, AudioFileInfo } from 'hls-streamer';
+const type: AudioFormat = 'mp3';
+
+// v4.x — preferred
+import { MediaFormat, MediaFileInfo } from 'hls-streamer';
+const type: MediaFormat = 'mp3'; // same values, broader type
+
+// v3.x names still compile in v4 (deprecated, removed in v5)
+import { AudioFormat } from 'hls-streamer'; // ⚠️ deprecated alias
+
+// Video — new in v4
+const streamer = new HlsStreamer({ filePath: 'movie.mp4' });
+const playlist = await streamer.createM3U8(); // HLS v7 + EXT-X-MAP
+const type = await streamer.getMediaType();   // 'video'
+```
 
 ---
 
-## Version 3.0.0 Breaking Changes
+### Version 3.1.0
 
-This major release adds multi-format support with pure TypeScript parsers. While most code remains backward compatible, please note:
+- **HLS compliance**: `#EXTINF` lines now include the required trailing comma.
+- **AAC ADTS detection**: ADTS buffers no longer misclassified as MP3.
+- **Extensionless files**: constructor now accepts extensionless files when magic bytes identify a supported format.
 
-### What Changed
-- **New formats**: Added AAC, M4A, OGG Vorbis, FLAC, and WAV support
-- **Format detection**: Files are now validated against all supported formats, not just MP3
-- **Error types**: `InvalidFileError` for non-MP3 files is now `UnsupportedFormatError` for unsupported formats
-- **Internal architecture**: MP3 parsing refactored into modular `Parsers/` directory
+---
 
-### Migration Guide
-```typescript
-// v2.x - Only MP3 supported
-const streamer = new HlsStreamer({ filePath: 'song.mp3' });
+### Version 3.0.0
 
-// v3.x - All formats work the same way!
-const streamer = new HlsStreamer({ filePath: 'song.mp3' }); // ✅ Still works
-const streamer = new HlsStreamer({ filePath: 'song.ogg' }); // ✅ Now supported
-const streamer = new HlsStreamer({ filePath: 'song.flac' }); // ✅ Now supported
-
-// Error handling update
-try {
-  new HlsStreamer({ filePath: 'document.pdf' });
-} catch (err) {
-  // v2.x: InvalidFileError
-  // v3.x: UnsupportedFormatError
-}
-```
-
-### Deprecated APIs
-- `Mp3FileInfo` → Use `AudioFileInfo` (backward compatible, but deprecated)
-- `Mp3FrameInfo` → Use `AudioFrameInfo` (backward compatible, but deprecated)
-- `FileLib.analyzeMP3File()` → Use `FileLib.analyzeAudioFile()` (old method still works)
-
-All deprecated APIs remain functional for backward compatibility but will be removed in v4.0.0.
+- Added AAC, M4A, OGG Vorbis, FLAC, and WAV support.
+- Refactored MP3 parsing into a modular `Parsers/` directory.
+- `InvalidFileError` for non-MP3 files replaced by `UnsupportedFormatError`.
 
 ---
 

@@ -22,6 +22,7 @@ export declare class HlsStreamer {
     private buildSegmentUrl;
     private calculateSegmentSize;
     private padNumber;
+    getMediaType(): Promise<'audio' | 'video'>;
     getSegmentDuration(segmentIndex: number): Promise<number>;
 }
 export * from './Interfaces/HlsStreamer';

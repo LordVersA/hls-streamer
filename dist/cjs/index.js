@@ -103,7 +103,7 @@ class HlsStreamer {
             throw new HlsStreamerErrors_1.InvalidFileError('Path is not a file');
         }
         if (format) {
-            const supportedFormats = ['mp3', 'aac', 'm4a', 'ogg', 'flac', 'wav'];
+            const supportedFormats = ['mp3', 'aac', 'm4a', 'ogg', 'flac', 'wav', 'mp4', 'mov', 'm4v'];
             if (!supportedFormats.includes(format.toLowerCase())) {
                 throw new HlsStreamerErrors_1.UnsupportedFormatError(format);
             }
@@ -128,7 +128,7 @@ class HlsStreamer {
     }
     async getFileInfo() {
         if (!this.fileInfo) {
-            const analysis = await FileLib_1.FileLib.analyzeAudioFile(this.filePath, this.formatOverride);
+            const analysis = await FileLib_1.FileLib.analyzeMediaFile(this.filePath, this.formatOverride);
             if (analysis.size <= 0) {
                 throw new HlsStreamerErrors_1.InvalidFileError('File is empty');
             }
@@ -169,13 +169,19 @@ class HlsStreamer {
         }
         const maxSegmentDuration = segments.reduce((max, segment) => Math.max(max, segment.duration), 0);
         const targetDurationSeconds = Math.max(1, Math.ceil(maxSegmentDuration || fileInfo.duration || 1));
+        const isVideo = !!fileInfo.initSegment;
         const m3u8 = [
             '#EXTM3U',
-            '#EXT-X-VERSION:6',
+            `#EXT-X-VERSION:${isVideo ? 7 : 6}`,
             '#EXT-X-PLAYLIST-TYPE:VOD',
             `#EXT-X-TARGETDURATION:${targetDurationSeconds}`,
             '#EXT-X-MEDIA-SEQUENCE:0',
         ];
+        if (isVideo && fileInfo.initSegment) {
+            const { offset, length } = fileInfo.initSegment;
+            const initUrl = this.buildSegmentUrl(offset, offset + length, -1, 'init');
+            m3u8.push(`#EXT-X-MAP:URI="${initUrl}"`);
+        }
         segments.forEach((segment, index) => {
             const segmentUrl = this.buildSegmentUrl(segment.start, segment.end, index);
             m3u8.push(`#EXTINF:${segment.duration.toFixed(3)},`);
@@ -207,7 +213,10 @@ class HlsStreamer {
             while (frameCursor < frames.length) {
                 const frame = frames[frameCursor];
                 const nextBytes = consumedBytes + frame.length;
-                if (consumedBytes > 0 && nextBytes > targetBytes) {
+                if (consumedBytes > 0 && frame.keyFrame === true && consumedBytes >= targetBytes * 0.5) {
+                    break;
+                }
+                if (consumedBytes > 0 && nextBytes > targetBytes && frame.keyFrame !== true) {
                     break;
                 }
                 consumedBytes = nextBytes;
@@ -296,10 +305,11 @@ class HlsStreamer {
             : 16000;
         return segmentSize / estimatedBytesPerSecond;
     }
-    buildSegmentUrl(start, end, index) {
+    buildSegmentUrl(start, end, index, nameSuffix) {
         const baseUrlPrefix = this.baseUrl ? `/${this.baseUrl}` : '';
         const ext = this.fileInfo?.format || node_path_1.default.extname(this.filePath).toLowerCase().slice(1) || 'mp3';
-        return `${baseUrlPrefix}/${start}/${end}/${this.fileName}${this.padNumber(index, 3)}.${ext}`;
+        const name = nameSuffix !== undefined ? `${this.fileName}${nameSuffix}` : `${this.fileName}${this.padNumber(index, 3)}`;
+        return `${baseUrlPrefix}/${start}/${end}/${name}.${ext}`;
     }
     calculateSegmentSize(segmentIndex) {
         if (!this.enableFastStart) {
@@ -316,6 +326,11 @@ class HlsStreamer {
     }
     padNumber(value, padding) {
         return value.toString().padStart(padding, '0');
+    }
+    async getMediaType() {
+        const fileInfo = await this.getFileInfo();
+        const videoFormats = ['mp4', 'mov', 'm4v'];
+        return videoFormats.includes(fileInfo.format) ? 'video' : 'audio';
     }
     async getSegmentDuration(segmentIndex) {
         if (!Number.isInteger(segmentIndex) || segmentIndex < 0) {

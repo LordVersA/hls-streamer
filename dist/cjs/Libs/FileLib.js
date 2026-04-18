@@ -122,7 +122,7 @@ class FileLib {
         ]);
         return this.analyzeMP3Buffer(buffer, { fileSize: stat.size });
     }
-    static async analyzeAudioFile(filePath, format) {
+    static async analyzeMediaFile(filePath, format) {
         const [buffer, stat] = await Promise.all([
             node_fs_1.default.promises.readFile(filePath),
             node_fs_1.default.promises.stat(filePath)
@@ -134,9 +134,12 @@ class FileLib {
         if (format !== undefined) {
             opts.format = format;
         }
-        return this.analyzeAudioBuffer(buffer, opts);
+        return this.analyzeMediaBuffer(buffer, opts);
     }
-    static analyzeAudioBuffer(buffer, opts = {}) {
+    static async analyzeAudioFile(filePath, format) {
+        return this.analyzeMediaFile(filePath, format);
+    }
+    static analyzeMediaBuffer(buffer, opts = {}) {
         let parser;
         if (opts.format) {
             parser = ParserFactory_1.ParserFactory.getParser(opts.format);
@@ -155,6 +158,9 @@ class FileLib {
         }
         const analyzeOpts = opts.fileSize !== undefined ? { fileSize: opts.fileSize } : {};
         return parser.analyze(buffer, analyzeOpts);
+    }
+    static analyzeAudioBuffer(buffer, opts = {}) {
+        return this.analyzeMediaBuffer(buffer, opts);
     }
     static calculateFrameLength(frame) {
         if (frame.layer === 1) {

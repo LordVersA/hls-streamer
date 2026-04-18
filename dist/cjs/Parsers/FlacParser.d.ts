@@ -1,11 +1,11 @@
-import { IAudioParser, AudioFileInfo, AudioFormat } from './IAudioParser';
-export declare class FlacParser implements IAudioParser {
+import { IMediaParser, MediaFileInfo, MediaFormat } from './IMediaParser';
+export declare class FlacParser implements IMediaParser {
     private static readonly FLAC_SIGNATURE;
-    getFormat(): AudioFormat;
+    getFormat(): MediaFormat;
     canParse(buffer: Buffer): boolean;
     analyze(buffer: Buffer, opts?: {
         fileSize?: number;
-    }): AudioFileInfo;
+    }): MediaFileInfo;
     private parseStreamInfo;
     private findNextFrameSync;
     private parseFrameHeader;

@@ -48,18 +48,32 @@ describe('FormatDetector', () => {
       expect(FormatDetector.detectFormat(buffer)).toBe('m4a');
     });
 
-    it('should detect M4A format with mp42 brand', () => {
+    it('should detect MP4 format with mp42 brand', () => {
       const buffer = Buffer.alloc(12);
       buffer.write('ftyp', 4);
       buffer.write('mp42', 8);
-      expect(FormatDetector.detectFormat(buffer)).toBe('m4a');
+      expect(FormatDetector.detectFormat(buffer)).toBe('mp4');
     });
 
-    it('should detect M4A format with isom brand', () => {
+    it('should detect MP4 format with isom brand', () => {
       const buffer = Buffer.alloc(12);
       buffer.write('ftyp', 4);
       buffer.write('isom', 8);
-      expect(FormatDetector.detectFormat(buffer)).toBe('m4a');
+      expect(FormatDetector.detectFormat(buffer)).toBe('mp4');
+    });
+
+    it('should detect MOV format with qt brand', () => {
+      const buffer = Buffer.alloc(12);
+      buffer.write('ftyp', 4);
+      buffer.write('qt  ', 8);
+      expect(FormatDetector.detectFormat(buffer)).toBe('mov');
+    });
+
+    it('should detect M4V format with M4V brand', () => {
+      const buffer = Buffer.alloc(12);
+      buffer.write('ftyp', 4);
+      buffer.write('M4V ', 8);
+      expect(FormatDetector.detectFormat(buffer)).toBe('m4v');
     });
 
     it('should detect AAC ADTS format', () => {
@@ -134,7 +148,7 @@ describe('FormatDetector', () => {
   describe('getSupportedExtensions', () => {
     it('should return all supported extensions', () => {
       const extensions = FormatDetector.getSupportedExtensions();
-      expect(extensions).toEqual(['.mp3', '.aac', '.m4a', '.m4b', '.ogg', '.oga', '.flac', '.wav']);
+      expect(extensions).toEqual(['.mp3', '.aac', '.m4a', '.m4b', '.ogg', '.oga', '.flac', '.wav', '.mp4', '.mov', '.m4v']);
     });
 
     it('should return array with dot prefixes', () => {

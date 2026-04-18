@@ -6,11 +6,13 @@ const AacParser_1 = require("./AacParser");
 const OggParser_1 = require("./OggParser");
 const FlacParser_1 = require("./FlacParser");
 const WavParser_1 = require("./WavParser");
+const Mp4Parser_1 = require("./Mp4Parser");
 const FormatDetector_1 = require("../Libs/FormatDetector");
 class ParserFactory {
     static getParser(format) {
         const searchFormat = format === 'm4a' ? 'aac' : format;
-        return this.parsers.find(parser => parser.getFormat() === searchFormat) || null;
+        const resolvedFormat = (searchFormat === 'mov' || searchFormat === 'm4v') ? 'mp4' : searchFormat;
+        return this.parsers.find(parser => parser.getFormat() === resolvedFormat) || null;
     }
     static detectParser(buffer) {
         for (const parser of this.parsers) {
@@ -25,7 +27,7 @@ class ParserFactory {
         return format ? this.getParser(format) : null;
     }
     static getSupportedFormats() {
-        return ['mp3', 'aac', 'm4a', 'ogg', 'flac', 'wav'];
+        return ['mp3', 'aac', 'm4a', 'ogg', 'flac', 'wav', 'mp4', 'mov', 'm4v'];
     }
     static isFormatSupported(format) {
         return this.getSupportedFormats().includes(format);
@@ -41,7 +43,8 @@ Object.defineProperty(ParserFactory, "parsers", {
         new AacParser_1.AacParser(),
         new OggParser_1.OggParser(),
         new FlacParser_1.FlacParser(),
-        new WavParser_1.WavParser()
+        new WavParser_1.WavParser(),
+        new Mp4Parser_1.Mp4Parser(),
     ]
 });
 //# sourceMappingURL=ParserFactory.js.map

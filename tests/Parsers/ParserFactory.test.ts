@@ -187,7 +187,7 @@ describe('ParserFactory', () => {
   describe('getSupportedFormats', () => {
     it('should return all supported formats', () => {
       const formats = ParserFactory.getSupportedFormats();
-      expect(formats).toEqual(['mp3', 'aac', 'm4a', 'ogg', 'flac', 'wav']);
+      expect(formats).toEqual(['mp3', 'aac', 'm4a', 'ogg', 'flac', 'wav', 'mp4', 'mov', 'm4v']);
     });
 
     it('should return an array', () => {
@@ -209,8 +209,13 @@ describe('ParserFactory', () => {
 
     it('should return false for unsupported formats', () => {
       expect(ParserFactory.isFormatSupported('xyz')).toBe(false);
-      expect(ParserFactory.isFormatSupported('mp4')).toBe(false);
       expect(ParserFactory.isFormatSupported('avi')).toBe(false);
+    });
+
+    it('should return true for video formats', () => {
+      expect(ParserFactory.isFormatSupported('mp4')).toBe(true);
+      expect(ParserFactory.isFormatSupported('mov')).toBe(true);
+      expect(ParserFactory.isFormatSupported('m4v')).toBe(true);
     });
 
     it('should handle empty string', () => {

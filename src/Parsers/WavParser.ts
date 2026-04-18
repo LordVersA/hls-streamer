@@ -1,11 +1,11 @@
-import { IAudioParser, AudioFileInfo, AudioFrameInfo, AudioFormat } from './IAudioParser';
+import { IMediaParser, MediaFileInfo, MediaFrameInfo, MediaFormat } from './IMediaParser';
 
 /**
  * WAV (RIFF/WAVE) format parser
  * Supports uncompressed PCM audio
  */
-export class WavParser implements IAudioParser {
-  getFormat(): AudioFormat {
+export class WavParser implements IMediaParser {
+  getFormat(): MediaFormat {
     return 'wav';
   }
 
@@ -15,7 +15,7 @@ export class WavParser implements IAudioParser {
            buffer.toString('ascii', 8, 12) === 'WAVE';
   }
 
-  analyze(buffer: Buffer, opts: { fileSize?: number } = {}): AudioFileInfo {
+  analyze(buffer: Buffer, opts: { fileSize?: number } = {}): MediaFileInfo {
     const warnings: string[] = [];
     const size = opts.fileSize ?? buffer.length;
 
@@ -123,7 +123,7 @@ export class WavParser implements IAudioParser {
 
     // For WAV, create virtual "frames" representing reasonable chunks
     // We'll use 1-second frames for segmentation purposes
-    const frames: AudioFrameInfo[] = [];
+    const frames: MediaFrameInfo[] = [];
     const samplesPerFrame = fmtData.sampleRate; // 1 second worth
     const bytesPerFrame = samplesPerFrame * bytesPerSample * fmtData.channels;
 
@@ -151,7 +151,7 @@ export class WavParser implements IAudioParser {
       frameIndex++;
     }
 
-    const metadata: AudioFileInfo = {
+    const metadata: MediaFileInfo = {
       format: 'wav',
       size,
       duration,

@@ -7,7 +7,11 @@ export class AacParser {
             return false;
         }
         if (buffer.length >= 12 && buffer.toString('ascii', 4, 8) === 'ftyp') {
-            return true;
+            const brand = buffer.toString('ascii', 8, 12);
+            if (brand === 'M4A ' || brand === 'M4B ') {
+                return true;
+            }
+            return false;
         }
         if (buffer[0] === 0xff && (buffer[1] & 0xf6) === 0xf0) {
             return true;

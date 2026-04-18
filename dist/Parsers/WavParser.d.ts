@@ -1,9 +1,9 @@
-import { IAudioParser, AudioFileInfo, AudioFormat } from './IAudioParser';
-export declare class WavParser implements IAudioParser {
-    getFormat(): AudioFormat;
+import { IMediaParser, MediaFileInfo, MediaFormat } from './IMediaParser';
+export declare class WavParser implements IMediaParser {
+    getFormat(): MediaFormat;
     canParse(buffer: Buffer): boolean;
     analyze(buffer: Buffer, opts?: {
         fileSize?: number;
-    }): AudioFileInfo;
+    }): MediaFileInfo;
 }
 //# sourceMappingURL=WavParser.d.ts.map

@@ -1,11 +1,11 @@
-import { IAudioParser, AudioFileInfo, AudioFormat } from './IAudioParser';
-export declare class AacParser implements IAudioParser {
+import { IMediaParser, MediaFileInfo, MediaFormat } from './IMediaParser';
+export declare class AacParser implements IMediaParser {
     private static readonly SAMPLE_RATES;
-    getFormat(): AudioFormat;
+    getFormat(): MediaFormat;
     canParse(buffer: Buffer): boolean;
     analyze(buffer: Buffer, opts?: {
         fileSize?: number;
-    }): AudioFileInfo;
+    }): MediaFileInfo;
     private analyzeAdts;
     private analyzeM4a;
     private parseAdtsHeader;
