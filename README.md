@@ -1,6 +1,4 @@
-<div align="center">
-  <img src="assets/header.png" alt="HLS Streamer" width="100%">
-</div>
+![HLS Streamer](https://raw.githubusercontent.com/LordVersA/hls-streamer/main/assets/header.png)
 
 # HLS Streamer
 
