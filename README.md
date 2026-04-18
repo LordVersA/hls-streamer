@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="assets/header.png" alt="HLS Streamer" width="100%">
+</div>
+
 # HLS Streamer
 
 [![npm version](https://badge.fury.io/js/hls-streamer.svg)](https://badge.fury.io/js/hls-streamer)
