@@ -1,10 +1,9 @@
-import fs from "node:fs";
-import path from "node:path";
 import { HlsStreamerOptions, SegmentInfo, MediaFileInfo } from "./Interfaces/HlsStreamer";
+import { IStorageProvider } from "./Interfaces/IStorageProvider";
+import { LocalFileProvider } from "./Providers/LocalFileProvider";
 import { FileLib } from "./Libs/FileLib";
 import { FormatDetector } from "./Libs/FormatDetector";
 import {
-  FileNotFoundError,
   InvalidFileError,
   InvalidRangeError,
   InvalidParameterError,
@@ -12,11 +11,11 @@ import {
 } from "./errors/HlsStreamerErrors";
 
 /**
- * HLS streaming implementation for audio files without temporary file storage
- * Supports: MP3, AAC, M4A, OGG Vorbis, FLAC, WAV
+ * HLS streaming implementation for audio/video files without temporary file storage.
+ * Supports: MP3, AAC, M4A, OGG Vorbis, FLAC, WAV, MP4, MOV, M4V
  */
 export class HlsStreamer {
-  private readonly filePath: string;
+  private readonly provider: IStorageProvider;
   private readonly segmentSize: number;
   private readonly fileName: string;
   private readonly baseUrl: string;
@@ -25,14 +24,19 @@ export class HlsStreamer {
   private fileInfo?: MediaFileInfo;
   private segments: SegmentInfo[] | undefined;
 
-  /**
-   * Initialize HLS streamer with audio file and configuration
-   */
   constructor(options: HlsStreamerOptions) {
     this.validateOptions(options);
-    this.validateFile(options.filePath, options.format);
 
-    this.filePath = options.filePath;
+    if (options.storageProvider) {
+      this.provider = options.storageProvider;
+      this.provider.validateSync?.();
+    } else {
+      const local = new LocalFileProvider(options.filePath);
+      local.validateSync();
+      this.validateFormat(options.filePath, options.format);
+      this.provider = local;
+    }
+
     this.segmentSize = (options.segmentSizeKB ?? 512) * 1024;
     this.fileName = options.fileName ?? "file";
     this.baseUrl = options.baseUrl ?? "";
@@ -41,8 +45,11 @@ export class HlsStreamer {
   }
 
   private validateOptions(options: HlsStreamerOptions): void {
-    if (!options.filePath || typeof options.filePath !== 'string') {
-      throw new InvalidParameterError('filePath', options.filePath);
+    const hasFilePath = 'filePath' in options && !!options.filePath && typeof options.filePath === 'string';
+    const hasProvider = 'storageProvider' in options && !!options.storageProvider;
+
+    if (!hasFilePath && !hasProvider) {
+      throw new InvalidParameterError('filePath or storageProvider', (options as any).filePath ?? undefined);
     }
 
     if (options.segmentSizeKB !== undefined &&
@@ -55,45 +62,47 @@ export class HlsStreamer {
     }
   }
 
-  private validateFile(filePath: string, format?: string): void {
-    if (!fs.existsSync(filePath)) {
-      throw new FileNotFoundError(filePath);
-    }
-
-    const stat = fs.statSync(filePath);
-    if (!stat.isFile()) {
-      throw new InvalidFileError('Path is not a file');
-    }
-
-    // If format is specified, validate it
+  private validateFormat(filePath: string, format?: string): void {
     if (format) {
       const supportedFormats = ['mp3', 'aac', 'm4a', 'ogg', 'flac', 'wav', 'mp4', 'mov', 'm4v'];
       if (!supportedFormats.includes(format.toLowerCase())) {
         throw new UnsupportedFormatError(format);
       }
-    } else {
-      // Prefer fast extension validation, but allow extensionless or mislabeled files
-      // when their magic bytes are a supported audio format.
-      if (!FormatDetector.isSupportedExtension(filePath)) {
-        const fd = fs.openSync(filePath, 'r');
-        try {
-          const header = new Uint8Array(64);
-          const bytesRead = fs.readSync(fd, header, 0, header.length, 0);
-          const detectedFormat = FormatDetector.detectFormat(Buffer.from(header.subarray(0, bytesRead)));
-          if (!detectedFormat) {
-            const ext = path.extname(filePath);
-            throw new UnsupportedFormatError(ext || 'unknown');
-          }
-        } finally {
-          fs.closeSync(fd);
+    } else if (!FormatDetector.isSupportedExtension(filePath)) {
+      // For extensionless/mislabeled local files, read magic bytes synchronously
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const fd = fs.openSync(filePath, 'r');
+      try {
+        const header = new Uint8Array(64);
+        const bytesRead = fs.readSync(fd, header, 0, header.length, 0);
+        const detectedFormat = FormatDetector.detectFormat(Buffer.from(header.subarray(0, bytesRead)));
+        if (!detectedFormat) {
+          const ext = path.extname(filePath);
+          throw new UnsupportedFormatError(ext || 'unknown');
         }
+      } finally {
+        fs.closeSync(fd);
       }
     }
   }
 
   private async getFileInfo(): Promise<MediaFileInfo> {
     if (!this.fileInfo) {
-      const analysis = await FileLib.analyzeMediaFile(this.filePath, this.formatOverride as any);
+      const [buffer, size] = await Promise.all([
+        this.provider.getBuffer(),
+        this.provider.getSize(),
+      ]);
+
+      let analysis;
+      try {
+        analysis = FileLib.analyzeMediaBuffer(buffer, {
+          fileSize: size,
+          format: this.formatOverride as any,
+        });
+      } catch {
+        throw new InvalidFileError('File is empty or format could not be detected');
+      }
 
       if (analysis.size <= 0) {
         throw new InvalidFileError('File is empty');
@@ -118,24 +127,12 @@ export class HlsStreamer {
     if (endByte > fileInfo.size) {
       throw new InvalidRangeError(startByte, endByte);
     }
-    const length = endByte - startByte;
-    const fd = fs.openSync(this.filePath, "r");
 
-    try {
-      if (length === 0) {
-        return Buffer.alloc(0);
-      }
-
-      const buffer = Buffer.alloc(length);
-      const bytesRead = fs.readSync(fd, buffer as any, 0, length, startByte);
-      return buffer.subarray(0, bytesRead);
-    } finally {
-      fs.closeSync(fd);
-    }
+    return this.provider.getRange(startByte, endByte);
   }
 
   /**
-   * Generate HLS M3U8 playlist for the MP3 file
+   * Generate HLS M3U8 playlist for the media file
    */
   async createM3U8(): Promise<string> {
     const [fileInfo, segments] = await Promise.all([
@@ -312,23 +309,21 @@ export class HlsStreamer {
   }
 
   private estimateSegmentDuration(segmentSize: number, fileInfo: MediaFileInfo): number {
-    // Use file info to make better duration estimate if available
     if (fileInfo.duration > 0 && fileInfo.audioDataSize > 0) {
       const bytesPerSecond = fileInfo.audioDataSize / fileInfo.duration;
       return segmentSize / bytesPerSecond;
     }
 
-    // Fallback: rough estimate based on average bitrate or assume 128kbps
     const estimatedBytesPerSecond = fileInfo.averageBitrate
       ? (fileInfo.averageBitrate * 1000) / 8
-      : 16000; // 128kbps default
+      : 16000;
 
     return segmentSize / estimatedBytesPerSecond;
   }
 
   private buildSegmentUrl(start: number, end: number, index: number, nameSuffix?: string): string {
     const baseUrlPrefix = this.baseUrl ? `/${this.baseUrl}` : '';
-    const ext = this.fileInfo?.format || path.extname(this.filePath).toLowerCase().slice(1) || 'mp3';
+    const ext = this.fileInfo?.format ?? this.formatOverride ?? 'mp3';
     const name = nameSuffix !== undefined ? `${this.fileName}${nameSuffix}` : `${this.fileName}${this.padNumber(index, 3)}`;
     return `${baseUrlPrefix}/${start}/${end}/${name}.${ext}`;
   }
@@ -348,14 +343,12 @@ export class HlsStreamer {
     }
   }
 
-
   private padNumber(value: number, padding: number): string {
     return value.toString().padStart(padding, '0');
   }
 
   /**
    * Returns 'video' for MP4/MOV/M4V files, 'audio' for all other formats.
-   * Useful for consumers building route prefixes without parsing file extensions.
    */
   async getMediaType(): Promise<'audio' | 'video'> {
     const fileInfo = await this.getFileInfo();
@@ -385,3 +378,6 @@ export class HlsStreamer {
 // Export interfaces and errors for consumers
 export * from './Interfaces/HlsStreamer';
 export * from './errors/HlsStreamerErrors';
+export { LocalFileProvider } from './Providers/LocalFileProvider';
+export { S3Provider } from './Providers/S3Provider';
+export type { S3ProviderOptions } from './Providers/S3Provider';

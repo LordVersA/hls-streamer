@@ -13,19 +13,15 @@ var __createBinding = (this && this.__createBinding) || (Object.create ? (functi
 var __exportStar = (this && this.__exportStar) || function(m, exports) {
     for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.HlsStreamer = void 0;
-const node_fs_1 = __importDefault(require("node:fs"));
-const node_path_1 = __importDefault(require("node:path"));
+exports.S3Provider = exports.LocalFileProvider = exports.HlsStreamer = void 0;
+const LocalFileProvider_1 = require("./Providers/LocalFileProvider");
 const FileLib_1 = require("./Libs/FileLib");
 const FormatDetector_1 = require("./Libs/FormatDetector");
 const HlsStreamerErrors_1 = require("./errors/HlsStreamerErrors");
 class HlsStreamer {
     constructor(options) {
-        Object.defineProperty(this, "filePath", {
+        Object.defineProperty(this, "provider", {
             enumerable: true,
             configurable: true,
             writable: true,
@@ -74,8 +70,16 @@ class HlsStreamer {
             value: void 0
         });
         this.validateOptions(options);
-        this.validateFile(options.filePath, options.format);
-        this.filePath = options.filePath;
+        if (options.storageProvider) {
+            this.provider = options.storageProvider;
+            this.provider.validateSync?.();
+        }
+        else {
+            const local = new LocalFileProvider_1.LocalFileProvider(options.filePath);
+            local.validateSync();
+            this.validateFormat(options.filePath, options.format);
+            this.provider = local;
+        }
         this.segmentSize = (options.segmentSizeKB ?? 512) * 1024;
         this.fileName = options.fileName ?? "file";
         this.baseUrl = options.baseUrl ?? "";
@@ -83,8 +87,10 @@ class HlsStreamer {
         this.formatOverride = options.format || undefined;
     }
     validateOptions(options) {
-        if (!options.filePath || typeof options.filePath !== 'string') {
-            throw new HlsStreamerErrors_1.InvalidParameterError('filePath', options.filePath);
+        const hasFilePath = 'filePath' in options && !!options.filePath && typeof options.filePath === 'string';
+        const hasProvider = 'storageProvider' in options && !!options.storageProvider;
+        if (!hasFilePath && !hasProvider) {
+            throw new HlsStreamerErrors_1.InvalidParameterError('filePath or storageProvider', options.filePath ?? undefined);
         }
         if (options.segmentSizeKB !== undefined &&
             (typeof options.segmentSizeKB !== 'number' || options.segmentSizeKB <= 0)) {
@@ -94,41 +100,47 @@ class HlsStreamer {
             throw new HlsStreamerErrors_1.InvalidParameterError('fileName', options.fileName);
         }
     }
-    validateFile(filePath, format) {
-        if (!node_fs_1.default.existsSync(filePath)) {
-            throw new HlsStreamerErrors_1.FileNotFoundError(filePath);
-        }
-        const stat = node_fs_1.default.statSync(filePath);
-        if (!stat.isFile()) {
-            throw new HlsStreamerErrors_1.InvalidFileError('Path is not a file');
-        }
+    validateFormat(filePath, format) {
         if (format) {
             const supportedFormats = ['mp3', 'aac', 'm4a', 'ogg', 'flac', 'wav', 'mp4', 'mov', 'm4v'];
             if (!supportedFormats.includes(format.toLowerCase())) {
                 throw new HlsStreamerErrors_1.UnsupportedFormatError(format);
             }
         }
-        else {
-            if (!FormatDetector_1.FormatDetector.isSupportedExtension(filePath)) {
-                const fd = node_fs_1.default.openSync(filePath, 'r');
-                try {
-                    const header = new Uint8Array(64);
-                    const bytesRead = node_fs_1.default.readSync(fd, header, 0, header.length, 0);
-                    const detectedFormat = FormatDetector_1.FormatDetector.detectFormat(Buffer.from(header.subarray(0, bytesRead)));
-                    if (!detectedFormat) {
-                        const ext = node_path_1.default.extname(filePath);
-                        throw new HlsStreamerErrors_1.UnsupportedFormatError(ext || 'unknown');
-                    }
+        else if (!FormatDetector_1.FormatDetector.isSupportedExtension(filePath)) {
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const fd = fs.openSync(filePath, 'r');
+            try {
+                const header = new Uint8Array(64);
+                const bytesRead = fs.readSync(fd, header, 0, header.length, 0);
+                const detectedFormat = FormatDetector_1.FormatDetector.detectFormat(Buffer.from(header.subarray(0, bytesRead)));
+                if (!detectedFormat) {
+                    const ext = path.extname(filePath);
+                    throw new HlsStreamerErrors_1.UnsupportedFormatError(ext || 'unknown');
                 }
-                finally {
-                    node_fs_1.default.closeSync(fd);
-                }
+            }
+            finally {
+                fs.closeSync(fd);
             }
         }
     }
     async getFileInfo() {
         if (!this.fileInfo) {
-            const analysis = await FileLib_1.FileLib.analyzeMediaFile(this.filePath, this.formatOverride);
+            const [buffer, size] = await Promise.all([
+                this.provider.getBuffer(),
+                this.provider.getSize(),
+            ]);
+            let analysis;
+            try {
+                analysis = FileLib_1.FileLib.analyzeMediaBuffer(buffer, {
+                    fileSize: size,
+                    format: this.formatOverride,
+                });
+            }
+            catch {
+                throw new HlsStreamerErrors_1.InvalidFileError('File is empty or format could not be detected');
+            }
             if (analysis.size <= 0) {
                 throw new HlsStreamerErrors_1.InvalidFileError('File is empty');
             }
@@ -145,19 +157,7 @@ class HlsStreamer {
         if (endByte > fileInfo.size) {
             throw new HlsStreamerErrors_1.InvalidRangeError(startByte, endByte);
         }
-        const length = endByte - startByte;
-        const fd = node_fs_1.default.openSync(this.filePath, "r");
-        try {
-            if (length === 0) {
-                return Buffer.alloc(0);
-            }
-            const buffer = Buffer.alloc(length);
-            const bytesRead = node_fs_1.default.readSync(fd, buffer, 0, length, startByte);
-            return buffer.subarray(0, bytesRead);
-        }
-        finally {
-            node_fs_1.default.closeSync(fd);
-        }
+        return this.provider.getRange(startByte, endByte);
     }
     async createM3U8() {
         const [fileInfo, segments] = await Promise.all([
@@ -307,7 +307,7 @@ class HlsStreamer {
     }
     buildSegmentUrl(start, end, index, nameSuffix) {
         const baseUrlPrefix = this.baseUrl ? `/${this.baseUrl}` : '';
-        const ext = this.fileInfo?.format || node_path_1.default.extname(this.filePath).toLowerCase().slice(1) || 'mp3';
+        const ext = this.fileInfo?.format ?? this.formatOverride ?? 'mp3';
         const name = nameSuffix !== undefined ? `${this.fileName}${nameSuffix}` : `${this.fileName}${this.padNumber(index, 3)}`;
         return `${baseUrlPrefix}/${start}/${end}/${name}.${ext}`;
     }
@@ -347,4 +347,8 @@ class HlsStreamer {
 exports.HlsStreamer = HlsStreamer;
 __exportStar(require("./Interfaces/HlsStreamer"), exports);
 __exportStar(require("./errors/HlsStreamerErrors"), exports);
+var LocalFileProvider_2 = require("./Providers/LocalFileProvider");
+Object.defineProperty(exports, "LocalFileProvider", { enumerable: true, get: function () { return LocalFileProvider_2.LocalFileProvider; } });
+var S3Provider_1 = require("./Providers/S3Provider");
+Object.defineProperty(exports, "S3Provider", { enumerable: true, get: function () { return S3Provider_1.S3Provider; } });
 //# sourceMappingURL=index.js.map

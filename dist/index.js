@@ -1,11 +1,10 @@
-import fs from "node:fs";
-import path from "node:path";
+import { LocalFileProvider } from "./Providers/LocalFileProvider";
 import { FileLib } from "./Libs/FileLib";
 import { FormatDetector } from "./Libs/FormatDetector";
-import { FileNotFoundError, InvalidFileError, InvalidRangeError, InvalidParameterError, UnsupportedFormatError } from "./errors/HlsStreamerErrors";
+import { InvalidFileError, InvalidRangeError, InvalidParameterError, UnsupportedFormatError } from "./errors/HlsStreamerErrors";
 export class HlsStreamer {
     constructor(options) {
-        Object.defineProperty(this, "filePath", {
+        Object.defineProperty(this, "provider", {
             enumerable: true,
             configurable: true,
             writable: true,
@@ -54,8 +53,16 @@ export class HlsStreamer {
             value: void 0
         });
         this.validateOptions(options);
-        this.validateFile(options.filePath, options.format);
-        this.filePath = options.filePath;
+        if (options.storageProvider) {
+            this.provider = options.storageProvider;
+            this.provider.validateSync?.();
+        }
+        else {
+            const local = new LocalFileProvider(options.filePath);
+            local.validateSync();
+            this.validateFormat(options.filePath, options.format);
+            this.provider = local;
+        }
         this.segmentSize = (options.segmentSizeKB ?? 512) * 1024;
         this.fileName = options.fileName ?? "file";
         this.baseUrl = options.baseUrl ?? "";
@@ -63,8 +70,10 @@ export class HlsStreamer {
         this.formatOverride = options.format || undefined;
     }
     validateOptions(options) {
-        if (!options.filePath || typeof options.filePath !== 'string') {
-            throw new InvalidParameterError('filePath', options.filePath);
+        const hasFilePath = 'filePath' in options && !!options.filePath && typeof options.filePath === 'string';
+        const hasProvider = 'storageProvider' in options && !!options.storageProvider;
+        if (!hasFilePath && !hasProvider) {
+            throw new InvalidParameterError('filePath or storageProvider', options.filePath ?? undefined);
         }
         if (options.segmentSizeKB !== undefined &&
             (typeof options.segmentSizeKB !== 'number' || options.segmentSizeKB <= 0)) {
@@ -74,41 +83,47 @@ export class HlsStreamer {
             throw new InvalidParameterError('fileName', options.fileName);
         }
     }
-    validateFile(filePath, format) {
-        if (!fs.existsSync(filePath)) {
-            throw new FileNotFoundError(filePath);
-        }
-        const stat = fs.statSync(filePath);
-        if (!stat.isFile()) {
-            throw new InvalidFileError('Path is not a file');
-        }
+    validateFormat(filePath, format) {
         if (format) {
             const supportedFormats = ['mp3', 'aac', 'm4a', 'ogg', 'flac', 'wav', 'mp4', 'mov', 'm4v'];
             if (!supportedFormats.includes(format.toLowerCase())) {
                 throw new UnsupportedFormatError(format);
             }
         }
-        else {
-            if (!FormatDetector.isSupportedExtension(filePath)) {
-                const fd = fs.openSync(filePath, 'r');
-                try {
-                    const header = new Uint8Array(64);
-                    const bytesRead = fs.readSync(fd, header, 0, header.length, 0);
-                    const detectedFormat = FormatDetector.detectFormat(Buffer.from(header.subarray(0, bytesRead)));
-                    if (!detectedFormat) {
-                        const ext = path.extname(filePath);
-                        throw new UnsupportedFormatError(ext || 'unknown');
-                    }
+        else if (!FormatDetector.isSupportedExtension(filePath)) {
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const fd = fs.openSync(filePath, 'r');
+            try {
+                const header = new Uint8Array(64);
+                const bytesRead = fs.readSync(fd, header, 0, header.length, 0);
+                const detectedFormat = FormatDetector.detectFormat(Buffer.from(header.subarray(0, bytesRead)));
+                if (!detectedFormat) {
+                    const ext = path.extname(filePath);
+                    throw new UnsupportedFormatError(ext || 'unknown');
                 }
-                finally {
-                    fs.closeSync(fd);
-                }
+            }
+            finally {
+                fs.closeSync(fd);
             }
         }
     }
     async getFileInfo() {
         if (!this.fileInfo) {
-            const analysis = await FileLib.analyzeMediaFile(this.filePath, this.formatOverride);
+            const [buffer, size] = await Promise.all([
+                this.provider.getBuffer(),
+                this.provider.getSize(),
+            ]);
+            let analysis;
+            try {
+                analysis = FileLib.analyzeMediaBuffer(buffer, {
+                    fileSize: size,
+                    format: this.formatOverride,
+                });
+            }
+            catch {
+                throw new InvalidFileError('File is empty or format could not be detected');
+            }
             if (analysis.size <= 0) {
                 throw new InvalidFileError('File is empty');
             }
@@ -125,19 +140,7 @@ export class HlsStreamer {
         if (endByte > fileInfo.size) {
             throw new InvalidRangeError(startByte, endByte);
         }
-        const length = endByte - startByte;
-        const fd = fs.openSync(this.filePath, "r");
-        try {
-            if (length === 0) {
-                return Buffer.alloc(0);
-            }
-            const buffer = Buffer.alloc(length);
-            const bytesRead = fs.readSync(fd, buffer, 0, length, startByte);
-            return buffer.subarray(0, bytesRead);
-        }
-        finally {
-            fs.closeSync(fd);
-        }
+        return this.provider.getRange(startByte, endByte);
     }
     async createM3U8() {
         const [fileInfo, segments] = await Promise.all([
@@ -287,7 +290,7 @@ export class HlsStreamer {
     }
     buildSegmentUrl(start, end, index, nameSuffix) {
         const baseUrlPrefix = this.baseUrl ? `/${this.baseUrl}` : '';
-        const ext = this.fileInfo?.format || path.extname(this.filePath).toLowerCase().slice(1) || 'mp3';
+        const ext = this.fileInfo?.format ?? this.formatOverride ?? 'mp3';
         const name = nameSuffix !== undefined ? `${this.fileName}${nameSuffix}` : `${this.fileName}${this.padNumber(index, 3)}`;
         return `${baseUrlPrefix}/${start}/${end}/${name}.${ext}`;
     }
@@ -326,4 +329,6 @@ export class HlsStreamer {
 }
 export * from './Interfaces/HlsStreamer';
 export * from './errors/HlsStreamerErrors';
+export { LocalFileProvider } from './Providers/LocalFileProvider';
+export { S3Provider } from './Providers/S3Provider';
 //# sourceMappingURL=index.js.map

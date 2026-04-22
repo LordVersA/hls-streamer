@@ -1,11 +1,21 @@
 import { MediaFormat } from '../Parsers/IMediaParser';
+import { IStorageProvider } from './IStorageProvider';
 
-/**
- * Configuration options for HLS streamer
- */
-export interface HlsStreamerOptions {
-  /** Path to the media file (supports: MP3, AAC, M4A, OGG, FLAC, WAV, MP4, MOV, M4V) */
+export type { IStorageProvider };
+
+type LocalFileSource = {
+  /** Path to the local media file */
   filePath: string;
+  storageProvider?: never;
+};
+
+type RemoteStorageSource = {
+  /** Remote storage provider (e.g. S3Provider) */
+  storageProvider: IStorageProvider;
+  filePath?: never;
+};
+
+type SharedOptions = {
   /** Segment size in KB (default: 512) */
   segmentSizeKB?: number;
   /** Base filename for segments (default: "file") */
@@ -16,7 +26,13 @@ export interface HlsStreamerOptions {
   enableFastStart?: boolean;
   /** Override auto-detected format (optional) */
   format?: MediaFormat;
-}
+};
+
+/**
+ * Configuration options for HLS streamer.
+ * Provide either `filePath` (local) or `storageProvider` (remote) — not both.
+ */
+export type HlsStreamerOptions = (LocalFileSource | RemoteStorageSource) & SharedOptions;
 
 /**
  * Information about a specific segment

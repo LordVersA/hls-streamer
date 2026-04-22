@@ -10,6 +10,7 @@ import {
   UnsupportedFormatError
 } from '../src/errors/HlsStreamerErrors';
 import { MockMP3 } from './fixtures/mock-mp3';
+import { MockStorageProvider } from './Providers/MockProvider';
 
 const parseM3U8 = (playlist: string) => {
   const lines = playlist.split('\n').map((line) => line.trim()).filter(Boolean);
@@ -405,6 +406,146 @@ describe('HlsStreamer', () => {
       await expect(streamer.createM3U8()).rejects.toThrow(InvalidFileError);
 
       await MockMP3.cleanup(emptyMP3Path);
+    });
+  });
+
+  describe('with storageProvider', () => {
+    let mp3Buffer: Buffer;
+
+    beforeEach(() => {
+      mp3Buffer = MockMP3.createMockMP3Buffer(1024 * 1024);
+    });
+
+    describe('Constructor', () => {
+      it('should accept a storageProvider instead of filePath', () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        expect(() => new HlsStreamer({ storageProvider: provider })).not.toThrow();
+      });
+
+      it('should call validateSync on the provider', () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        new HlsStreamer({ storageProvider: provider });
+        expect(provider.validateSyncCalled).toBe(true);
+      });
+
+      it('should propagate errors thrown by validateSync', () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        provider.validateSyncError = new Error('provider not ready');
+        expect(() => new HlsStreamer({ storageProvider: provider })).toThrow('provider not ready');
+      });
+
+      it('should throw InvalidParameterError when neither filePath nor storageProvider given', () => {
+        expect(() => new HlsStreamer({} as any)).toThrow(InvalidParameterError);
+      });
+    });
+
+    describe('createM3U8', () => {
+      it('should generate a valid M3U8 playlist', async () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const streamer = new HlsStreamer({ storageProvider: provider });
+        const m3u8 = await streamer.createM3U8();
+        expect(m3u8).toContain('#EXTM3U');
+        expect(m3u8).toContain('#EXT-X-ENDLIST');
+      });
+
+      it('should produce segments covering the full file', async () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const streamer = new HlsStreamer({ storageProvider: provider, segmentSizeKB: 256 });
+        const m3u8 = await streamer.createM3U8();
+        const parsed = parseM3U8(m3u8);
+        expect(parsed.segments.length).toBeGreaterThan(0);
+        expect(parsed.durations.every((d) => d > 0)).toBe(true);
+      });
+
+      it('should respect fileName and baseUrl options', async () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const streamer = new HlsStreamer({
+          storageProvider: provider,
+          fileName: 'track',
+          baseUrl: 'media',
+        });
+        const m3u8 = await streamer.createM3U8();
+        expect(m3u8).toContain('/media/');
+        expect(m3u8).toContain('track');
+      });
+
+      it('should use mp3 as extension in segment URLs (detected from buffer)', async () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const streamer = new HlsStreamer({ storageProvider: provider });
+        const m3u8 = await streamer.createM3U8();
+        const segmentLines = m3u8.split('\n').filter((l) => !l.startsWith('#') && l.trim());
+        expect(segmentLines.every((l) => l.endsWith('.mp3'))).toBe(true);
+      });
+
+      it('should use format override in segment URLs when provided', async () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const streamer = new HlsStreamer({ storageProvider: provider, format: 'mp3' });
+        const m3u8 = await streamer.createM3U8();
+        const segmentLines = m3u8.split('\n').filter((l) => !l.startsWith('#') && l.trim());
+        expect(segmentLines.every((l) => l.endsWith('.mp3'))).toBe(true);
+      });
+    });
+
+    describe('getFileBuffer', () => {
+      it('should delegate to provider.getRange', async () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const getRangeSpy = jest.spyOn(provider, 'getRange');
+        const streamer = new HlsStreamer({ storageProvider: provider });
+
+        await streamer.getFileBuffer(0, 100);
+
+        expect(getRangeSpy).toHaveBeenCalledWith(0, 100);
+      });
+
+      it('should return the correct bytes', async () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const streamer = new HlsStreamer({ storageProvider: provider });
+        const result = await streamer.getFileBuffer(10, 50);
+        expect(result).toEqual(mp3Buffer.subarray(10, 50));
+      });
+
+      it('should throw InvalidRangeError for negative start', async () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const streamer = new HlsStreamer({ storageProvider: provider });
+        await expect(streamer.getFileBuffer(-1, 50)).rejects.toThrow(InvalidRangeError);
+      });
+
+      it('should throw InvalidRangeError when end exceeds file size', async () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const streamer = new HlsStreamer({ storageProvider: provider });
+        await expect(streamer.getFileBuffer(0, mp3Buffer.length + 1)).rejects.toThrow(InvalidRangeError);
+      });
+
+      it('should return empty buffer for zero-length range', async () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const streamer = new HlsStreamer({ storageProvider: provider });
+        const result = await streamer.getFileBuffer(10, 10);
+        expect(result.length).toBe(0);
+      });
+    });
+
+    describe('getSegmentDuration', () => {
+      it('should return a positive duration for segment 0', async () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const streamer = new HlsStreamer({ storageProvider: provider });
+        const duration = await streamer.getSegmentDuration(0);
+        expect(duration).toBeGreaterThan(0);
+      });
+
+      it('should throw InvalidParameterError for out-of-bounds index', async () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const streamer = new HlsStreamer({ storageProvider: provider });
+        await expect(streamer.getSegmentDuration(99999)).rejects.toThrow(InvalidParameterError);
+      });
+    });
+
+    describe('getMediaType', () => {
+      it('should return "audio" for an MP3 buffer', async () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const streamer = new HlsStreamer({ storageProvider: provider });
+        const type = await streamer.getMediaType();
+        expect(type).toBe('audio');
+      });
     });
   });
 

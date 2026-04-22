@@ -16,4 +16,8 @@ export declare class InvalidParameterError extends HlsStreamerError {
 export declare class UnsupportedFormatError extends HlsStreamerError {
     constructor(format: string);
 }
+export declare class StorageProviderError extends HlsStreamerError {
+    readonly resourceId?: string | undefined;
+    constructor(message: string, resourceId?: string | undefined);
+}
 //# sourceMappingURL=HlsStreamerErrors.d.ts.map

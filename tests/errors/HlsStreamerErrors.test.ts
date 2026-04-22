@@ -3,7 +3,8 @@ import {
   FileNotFoundError,
   InvalidFileError,
   InvalidRangeError,
-  InvalidParameterError
+  InvalidParameterError,
+  StorageProviderError
 } from '../../src/errors/HlsStreamerErrors';
 
 describe('HlsStreamerErrors', () => {
@@ -106,6 +107,27 @@ describe('HlsStreamerErrors', () => {
       const value = { test: 'object' };
       const error = new InvalidParameterError('testParam', value);
       expect(error.message).toBe("Invalid parameter 'testParam': [object Object]");
+    });
+  });
+
+  describe('StorageProviderError', () => {
+    it('should create error with correct message and name', () => {
+      const error = new StorageProviderError('connection refused');
+      expect(error.message).toBe('Storage provider error: connection refused');
+      expect(error.name).toBe('StorageProviderError');
+      expect(error).toBeInstanceOf(HlsStreamerError);
+      expect(error).toBeInstanceOf(StorageProviderError);
+    });
+
+    it('should include resourceId in message when provided', () => {
+      const error = new StorageProviderError('not found', 's3://bucket/key.mp3');
+      expect(error.message).toBe('Storage provider error for s3://bucket/key.mp3: not found');
+      expect(error.resourceId).toBe('s3://bucket/key.mp3');
+    });
+
+    it('should have undefined resourceId when not provided', () => {
+      const error = new StorageProviderError('fail');
+      expect(error.resourceId).toBeUndefined();
     });
   });
 });

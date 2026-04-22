@@ -57,3 +57,13 @@ export class UnsupportedFormatError extends HlsStreamerError {
     this.name = 'UnsupportedFormatError';
   }
 }
+
+/**
+ * Thrown when a storage provider operation fails
+ */
+export class StorageProviderError extends HlsStreamerError {
+  constructor(message: string, public readonly resourceId?: string) {
+    super(`Storage provider error${resourceId ? ` for ${resourceId}` : ''}: ${message}`);
+    this.name = 'StorageProviderError';
+  }
+}

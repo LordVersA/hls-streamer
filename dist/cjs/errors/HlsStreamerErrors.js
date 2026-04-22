@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.UnsupportedFormatError = exports.InvalidParameterError = exports.InvalidRangeError = exports.InvalidFileError = exports.FileNotFoundError = exports.HlsStreamerError = void 0;
+exports.StorageProviderError = exports.UnsupportedFormatError = exports.InvalidParameterError = exports.InvalidRangeError = exports.InvalidFileError = exports.FileNotFoundError = exports.HlsStreamerError = void 0;
 class HlsStreamerError extends Error {
     constructor(message) {
         super(message);
@@ -43,4 +43,17 @@ class UnsupportedFormatError extends HlsStreamerError {
     }
 }
 exports.UnsupportedFormatError = UnsupportedFormatError;
+class StorageProviderError extends HlsStreamerError {
+    constructor(message, resourceId) {
+        super(`Storage provider error${resourceId ? ` for ${resourceId}` : ''}: ${message}`);
+        Object.defineProperty(this, "resourceId", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: resourceId
+        });
+        this.name = 'StorageProviderError';
+    }
+}
+exports.StorageProviderError = StorageProviderError;
 //# sourceMappingURL=HlsStreamerErrors.js.map

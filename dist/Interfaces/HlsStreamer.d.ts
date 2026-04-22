@@ -1,12 +1,22 @@
 import { MediaFormat } from '../Parsers/IMediaParser';
-export interface HlsStreamerOptions {
+import { IStorageProvider } from './IStorageProvider';
+export type { IStorageProvider };
+type LocalFileSource = {
     filePath: string;
+    storageProvider?: never;
+};
+type RemoteStorageSource = {
+    storageProvider: IStorageProvider;
+    filePath?: never;
+};
+type SharedOptions = {
     segmentSizeKB?: number;
     fileName?: string;
     baseUrl?: string;
     enableFastStart?: boolean;
     format?: MediaFormat;
-}
+};
+export type HlsStreamerOptions = (LocalFileSource | RemoteStorageSource) & SharedOptions;
 export interface SegmentInfo {
     start: number;
     end: number;

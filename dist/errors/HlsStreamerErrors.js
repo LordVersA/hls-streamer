@@ -34,4 +34,16 @@ export class UnsupportedFormatError extends HlsStreamerError {
         this.name = 'UnsupportedFormatError';
     }
 }
+export class StorageProviderError extends HlsStreamerError {
+    constructor(message, resourceId) {
+        super(`Storage provider error${resourceId ? ` for ${resourceId}` : ''}: ${message}`);
+        Object.defineProperty(this, "resourceId", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: resourceId
+        });
+        this.name = 'StorageProviderError';
+    }
+}
 //# sourceMappingURL=HlsStreamerErrors.js.map

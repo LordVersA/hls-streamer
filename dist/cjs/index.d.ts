@@ -1,6 +1,6 @@
 import { HlsStreamerOptions } from "./Interfaces/HlsStreamer";
 export declare class HlsStreamer {
-    private readonly filePath;
+    private readonly provider;
     private readonly segmentSize;
     private readonly fileName;
     private readonly baseUrl;
@@ -10,7 +10,7 @@ export declare class HlsStreamer {
     private segments;
     constructor(options: HlsStreamerOptions);
     private validateOptions;
-    private validateFile;
+    private validateFormat;
     private getFileInfo;
     getFileBuffer(startByte: number, endByte: number): Promise<Buffer>;
     createM3U8(): Promise<string>;
@@ -27,4 +27,7 @@ export declare class HlsStreamer {
 }
 export * from './Interfaces/HlsStreamer';
 export * from './errors/HlsStreamerErrors';
+export { LocalFileProvider } from './Providers/LocalFileProvider';
+export { S3Provider } from './Providers/S3Provider';
+export type { S3ProviderOptions } from './Providers/S3Provider';
 //# sourceMappingURL=index.d.ts.map

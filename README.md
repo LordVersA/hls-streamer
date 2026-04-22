@@ -14,6 +14,7 @@ HLS Streamer converts audio and video files (MP3, AAC, M4A, OGG Vorbis, FLAC, WA
 - [How It Works](#how-it-works)
 - [Quick Start](#quick-start)
 - [Serving Over HTTP](#serving-over-http)
+- [Remote Storage (S3 / MinIO)](#remote-storage-s3--minio)
 - [Configuration Reference](#configuration-reference)
 - [Playlist Anatomy](#playlist-anatomy)
 - [Operational Tips](#operational-tips)
@@ -26,6 +27,7 @@ HLS Streamer converts audio and video files (MP3, AAC, M4A, OGG Vorbis, FLAC, WA
 - **Multi-format support** – handles MP3, AAC, M4A, OGG Vorbis, FLAC, WAV, MP4, MOV, and M4V with automatic format detection.
 - **Audio + Video** – audio files produce standard HLS v6 playlists; video files produce HLS v7 fMP4 playlists with an `EXT-X-MAP` init segment and keyframe-aligned boundaries.
 - **Zero dependencies** – no shared libraries, no ffmpeg, no native compilation. Pure TypeScript parsers for all formats. Drop it into Docker, serverless, or edge runtimes.
+- **Remote storage** – stream directly from S3, MinIO, or any compatible object storage via the `IStorageProvider` interface — no local file required.
 - **Accurate segments** – real frame/packet parsing provides true durations, `#EXTINF` metadata, and target durations that match playback.
 - **Frame-aligned byte ranges** – every segment begins and ends on verified frame boundaries; video segments snap to keyframes to prevent decoding artifacts.
 - **No temp files** – streams straight from the source file using byte-range reads.
@@ -34,11 +36,12 @@ HLS Streamer converts audio and video files (MP3, AAC, M4A, OGG Vorbis, FLAC, WA
 
 ## How It Works
 
-1. **Format detection** – automatically detects format from file content (magic bytes / `ftyp` brand) or extension, with optional manual override.
-2. **Metadata analysis** – format-specific parsers extract frame/packet tables with offsets, durations, and (for video) keyframe markers.
-3. **Segment planning** – boundaries are calculated from the frame table so each segment contains whole frames while respecting your target size. Video segments snap to I-frame boundaries.
-4. **Playlist generation** – `createM3U8()` emits an `#EXTM3U` playlist. Audio files use HLS v6; video files use HLS v7 with `EXT-X-MAP` pointing to the `moov` init segment.
-5. **On-demand byte ranges** – `getFileBuffer(start, end)` reads only the bytes needed for a given segment or init segment.
+1. **Storage abstraction** – the source is either a local file (via `filePath`) or any object storage (via `storageProvider`). Both expose the same byte-range interface internally.
+2. **Format detection** – automatically detects format from file content (magic bytes / `ftyp` brand) or extension, with optional manual override.
+3. **Metadata analysis** – format-specific parsers extract frame/packet tables with offsets, durations, and (for video) keyframe markers.
+4. **Segment planning** – boundaries are calculated from the frame table so each segment contains whole frames while respecting your target size. Video segments snap to I-frame boundaries.
+5. **Playlist generation** – `createM3U8()` emits an `#EXTM3U` playlist. Audio files use HLS v6; video files use HLS v7 with `EXT-X-MAP` pointing to the `moov` init segment.
+6. **On-demand byte ranges** – `getFileBuffer(start, end)` reads only the requested bytes — from disk or object storage — without buffering the full file.
 
 ```
 ┌──────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌──────────────────────┐
@@ -145,16 +148,189 @@ For video files, an additional init segment URL is emitted as `EXT-X-MAP`:
 - `index` is zero-padded to three digits (`000`, `001`, ...).
 - Serve the exact byte range from the original file — no transcoding needed.
 
+## Remote Storage (S3 / MinIO)
+
+HLS Streamer can stream directly from object storage — no local file needed. Pass a `storageProvider` instead of `filePath`. The built-in `S3Provider` works with AWS S3, MinIO, Wasabi, Backblaze B2, and any S3-compatible service.
+
+### Installation
+
+The AWS SDK is a **peer dependency** and only required when using `S3Provider`. Install it separately:
+
+```bash
+npm install @aws-sdk/client-s3
+```
+
+### AWS S3
+
+```ts
+import { HlsStreamer, S3Provider } from 'hls-streamer';
+
+const provider = new S3Provider({
+  bucket: 'my-media-bucket',
+  key: 'podcasts/episode-42.mp3',
+  clientConfig: {
+    region: 'us-east-1',
+    // credentials resolved automatically from env / IAM role
+  },
+});
+
+const streamer = new HlsStreamer({
+  storageProvider: provider,
+  fileName: 'episode',
+  baseUrl: 'streams/ep42',
+  segmentSizeKB: 512,
+});
+
+const playlist = await streamer.createM3U8();
+```
+
+Passing explicit credentials:
+
+```ts
+import { S3Client } from '@aws-sdk/client-s3';
+import { HlsStreamer, S3Provider } from 'hls-streamer';
+
+const s3Client = new S3Client({
+  region: 'eu-west-1',
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+  },
+});
+
+const provider = new S3Provider({
+  bucket: 'my-media-bucket',
+  key: 'videos/clip.mp4',
+  client: s3Client, // reuse an existing client
+});
+
+const streamer = new HlsStreamer({ storageProvider: provider });
+```
+
+### MinIO
+
+MinIO is fully S3-compatible. Point `endpoint` at your MinIO server and set `forcePathStyle: true`:
+
+```ts
+import { S3Client } from '@aws-sdk/client-s3';
+import { HlsStreamer, S3Provider } from 'hls-streamer';
+
+const minioClient = new S3Client({
+  endpoint: 'http://localhost:9000',   // your MinIO server
+  region: 'us-east-1',                 // any non-empty string
+  forcePathStyle: true,                // required for MinIO
+  credentials: {
+    accessKeyId: 'minioadmin',
+    secretAccessKey: 'minioadmin',
+  },
+});
+
+const provider = new S3Provider({
+  bucket: 'media',
+  key: 'audio/track.mp3',
+  client: minioClient,
+});
+
+const streamer = new HlsStreamer({
+  storageProvider: provider,
+  fileName: 'track',
+  baseUrl: 'streams/track',
+});
+
+const playlist = await streamer.createM3U8();
+```
+
+### Serving S3 / MinIO streams over HTTP (Express)
+
+The HTTP handler is identical to the local-file version — only the streamer construction changes:
+
+```ts
+import express from 'express';
+import { S3Client } from '@aws-sdk/client-s3';
+import { HlsStreamer, S3Provider } from 'hls-streamer';
+
+const app = express();
+
+// Reuse one client for the lifetime of the process
+const s3 = new S3Client({ region: 'us-east-1' });
+
+function makeStreamer(bucket: string, key: string, sessionId: string) {
+  return new HlsStreamer({
+    storageProvider: new S3Provider({ bucket, key, client: s3 }),
+    baseUrl: `streams/${sessionId}`,
+    fileName: 'segment',
+  });
+}
+
+app.get('/streams/:session/playlist.m3u8', async (req, res, next) => {
+  try {
+    const streamer = makeStreamer('my-bucket', resolveKey(req.params.session), req.params.session);
+    res.type('application/vnd.apple.mpegurl');
+    res.send(await streamer.createM3U8());
+  } catch (err) { next(err); }
+});
+
+app.get('/streams/:session/:start/:end/:filename', async (req, res, next) => {
+  try {
+    const streamer = makeStreamer('my-bucket', resolveKey(req.params.session), req.params.session);
+    const mediaType = await streamer.getMediaType();
+    res.type(mediaType === 'video' ? 'video/mp4' : 'audio/mpeg');
+    res.set('Accept-Ranges', 'bytes');
+    res.send(await streamer.getFileBuffer(Number(req.params.start), Number(req.params.end)));
+  } catch (err) { next(err); }
+});
+```
+
+### Custom storage provider
+
+Implement `IStorageProvider` to connect any storage backend (GCS, Azure Blob, HTTP, etc.):
+
+```ts
+import { IStorageProvider } from 'hls-streamer';
+
+class MyProvider implements IStorageProvider {
+  readonly resourceId = 'custom://my-source';
+
+  async getSize(): Promise<number> { /* return total file size */ }
+  async getRange(start: number, end: number): Promise<Buffer> { /* [start, end) bytes */ }
+  async getHeader(): Promise<Buffer> { return this.getRange(0, 64); }
+  async getBuffer(): Promise<Buffer> { /* full file */ }
+}
+
+const streamer = new HlsStreamer({ storageProvider: new MyProvider() });
+```
+
+> **Tip:** `getRange` is the hot path — use HTTP byte-range requests (`Range: bytes=start-end`) to avoid downloading the full file for each segment.
+
+### Error handling
+
+```ts
+import { StorageProviderError } from 'hls-streamer';
+
+try {
+  const playlist = await streamer.createM3U8();
+} catch (err) {
+  if (err instanceof StorageProviderError) {
+    console.error(`Storage error for ${err.resourceId}:`, err.message);
+  }
+}
+```
+
+---
+
 ## Configuration Reference
 
-| Option            | Type          | Default      | Description |
-| ----------------- | ------------- | ------------ | ----------- |
-| `filePath`        | `string`      | —            | Path to the media file. Supports: MP3, AAC, M4A, OGG, FLAC, WAV, MP4, MOV, M4V. |
-| `segmentSizeKB`   | `number`      | `512`        | Target segment size in kilobytes. |
-| `fileName`        | `string`      | `"file"`     | Base name for generated segment URLs. |
-| `baseUrl`         | `string`      | `""`         | URL prefix inserted before each segment path. |
-| `enableFastStart` | `boolean`     | `false`      | Smaller first two segments for faster playback start. |
-| `format`          | `MediaFormat` | auto-detect  | Optional override: `'mp3'`, `'aac'`, `'m4a'`, `'ogg'`, `'flac'`, `'wav'`, `'mp4'`, `'mov'`, `'m4v'`. |
+Provide either `filePath` **or** `storageProvider` — not both.
+
+| Option              | Type                  | Default      | Description |
+| ------------------- | --------------------- | ------------ | ----------- |
+| `filePath`          | `string`              | —            | Path to a local media file. Supports: MP3, AAC, M4A, OGG, FLAC, WAV, MP4, MOV, M4V. |
+| `storageProvider`   | `IStorageProvider`    | —            | Remote storage provider (e.g. `S3Provider`). Mutually exclusive with `filePath`. |
+| `segmentSizeKB`     | `number`              | `512`        | Target segment size in kilobytes. |
+| `fileName`          | `string`              | `"file"`     | Base name for generated segment URLs. |
+| `baseUrl`           | `string`              | `""`         | URL prefix inserted before each segment path. |
+| `enableFastStart`   | `boolean`             | `false`      | Smaller first two segments for faster playback start. |
+| `format`            | `MediaFormat`         | auto-detect  | Optional override: `'mp3'`, `'aac'`, `'m4a'`, `'ogg'`, `'flac'`, `'wav'`, `'mp4'`, `'mov'`, `'m4v'`. |
 
 ### API Surface
 
@@ -163,7 +339,7 @@ For video files, an additional init segment URL is emitted as `EXT-X-MAP`:
 - `getSegmentDuration(index: number): Promise<number>` – Duration in seconds for a specific segment.
 - `getMediaType(): Promise<'audio' | 'video'>` – Returns `'video'` for MP4/MOV/M4V, `'audio'` for everything else.
 
-Custom error classes: `FileNotFoundError`, `InvalidFileError`, `InvalidRangeError`, `InvalidParameterError`, `UnsupportedFormatError`.
+Custom error classes: `FileNotFoundError`, `InvalidFileError`, `InvalidRangeError`, `InvalidParameterError`, `UnsupportedFormatError`, `StorageProviderError`.
 
 ### Supported Formats
 
@@ -225,6 +401,8 @@ Custom error classes: `FileNotFoundError`, `InvalidFileError`, `InvalidRangeErro
 - **CDN friendliness** – Segment URLs are deterministic byte ranges, making them ideal for edge caching. Use `Cache-Control: public, max-age=86400`.
 - **Serverless** – Zero-dependency design works in Lambda/Cloud Functions. `getFileBuffer` reads only the bytes needed, keeping memory usage low.
 - **Content-Type** – Serve audio segments as `audio/mpeg` (or the appropriate codec MIME type) and video segments as `video/mp4`. Use `getMediaType()` to branch at runtime.
+- **S3 client reuse** – Create one `S3Client` for the lifetime of your process and pass it to each `S3Provider`. This avoids per-request connection overhead and respects connection pool limits.
+- **MinIO in Docker** – Set `endpoint` to your MinIO container URL and `forcePathStyle: true`. The bucket must exist and the credentials must have `s3:GetObject` and `s3:HeadObject` permissions.
 - **Troubleshooting** – Inspect `FileLib.analyzeMediaFile()` to review parsing warnings and format-specific metadata.
 
 ## Development
@@ -254,6 +432,31 @@ Contributions are welcome! Please open an issue to discuss substantial changes b
 ---
 
 ## Release Notes
+
+### Version 4.5.0
+
+#### New Features
+
+- **Remote storage support** – stream directly from S3, MinIO, or any S3-compatible service without downloading files locally. Pass a `storageProvider` to `HlsStreamerOptions` instead of `filePath`.
+- **`S3Provider`** – built-in provider for AWS S3 and S3-compatible services (MinIO, Wasabi, Backblaze B2, etc.). Accepts a pre-configured `S3Client` or creates one from `clientConfig`. Uses HTTP byte-range requests for segments, avoiding full file downloads. `@aws-sdk/client-s3` is an **optional peer dependency** — only install it if you use `S3Provider`.
+- **`IStorageProvider` interface** – implement this to connect any custom storage backend (GCS, Azure Blob, HTTP, etc.).
+- **`StorageProviderError`** – new typed error thrown when a storage provider operation fails, carrying the `resourceId` of the failing resource.
+- **`LocalFileProvider`** – the existing filesystem logic is now a first-class provider. Exported for use in custom wrappers or testing.
+
+#### Migration
+
+No changes needed for existing code. `filePath` continues to work exactly as before.
+
+```ts
+// v4.0 — unchanged, still works
+new HlsStreamer({ filePath: '/local/audio.mp3' });
+
+// v4.5 — new: remote storage
+import { S3Provider } from 'hls-streamer';
+new HlsStreamer({ storageProvider: new S3Provider({ bucket: 'b', key: 'audio.mp3', client: s3 }) });
+```
+
+---
 
 ### Version 4.0.0
 
