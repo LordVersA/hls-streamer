@@ -7,9 +7,6 @@ export declare class AacParser implements IMediaParser {
         fileSize?: number;
     }): MediaFileInfo;
     private analyzeAdts;
-    private analyzeM4a;
     private parseAdtsHeader;
-    private parseBoxes;
-    private findBoxInData;
 }
 //# sourceMappingURL=AacParser.d.ts.map

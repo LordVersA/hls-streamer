@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AacParser = void 0;
+const Mp4Parser_1 = require("./Mp4Parser");
 class AacParser {
     getFormat() {
         return 'aac';
@@ -24,11 +25,10 @@ class AacParser {
     analyze(buffer, opts = {}) {
         const size = opts.fileSize ?? buffer.length;
         if (buffer.length >= 12 && buffer.toString('ascii', 4, 8) === 'ftyp') {
-            return this.analyzeM4a(buffer, size);
+            const result = new Mp4Parser_1.Mp4Parser().analyze(buffer, opts);
+            return { ...result, format: 'm4a' };
         }
-        else {
-            return this.analyzeAdts(buffer, size);
-        }
+        return this.analyzeAdts(buffer, size);
     }
     analyzeAdts(buffer, size) {
         const warnings = [];
@@ -103,84 +103,6 @@ class AacParser {
         }
         return metadata;
     }
-    analyzeM4a(buffer, size) {
-        const warnings = [];
-        const boxes = this.parseBoxes(buffer);
-        let duration = 0;
-        let sampleRate;
-        let channels;
-        let bitrate;
-        let audioDataSize = 0;
-        const mdatBox = boxes.find(b => b.type === 'mdat');
-        if (mdatBox) {
-            audioDataSize = mdatBox.size - 8;
-        }
-        const moovBox = boxes.find(b => b.type === 'moov');
-        if (moovBox && moovBox.offset + 8 <= buffer.length) {
-            const moovData = buffer.subarray(moovBox.offset + 8, Math.min(buffer.length, moovBox.offset + moovBox.size));
-            const mvhdBox = this.findBoxInData(moovData, 'mvhd');
-            if (mvhdBox && mvhdBox.offset + 20 <= moovData.length) {
-                const version = moovData[mvhdBox.offset];
-                const offset = version === 1 ? mvhdBox.offset + 20 : mvhdBox.offset + 12;
-                if (offset + 8 <= moovData.length) {
-                    const timescale = moovData.readUInt32BE(offset);
-                    const durationUnits = version === 1
-                        ? Number(moovData.readBigUInt64BE(offset + 4))
-                        : moovData.readUInt32BE(offset + 4);
-                    duration = timescale > 0 ? durationUnits / timescale : 0;
-                }
-            }
-            const mp4aBox = this.findBoxInData(moovData, 'mp4a');
-            if (mp4aBox && mp4aBox.offset + 28 <= moovData.length) {
-                channels = moovData.readUInt16BE(mp4aBox.offset + 16);
-                sampleRate = moovData.readUInt32BE(mp4aBox.offset + 24) >> 16;
-            }
-        }
-        const averageBitrate = duration > 0 ? (audioDataSize * 8) / duration / 1000 : undefined;
-        const frames = [];
-        if (duration > 0 && sampleRate) {
-            const samplesPerFrame = 1024;
-            const frameDuration = samplesPerFrame / sampleRate;
-            const totalFrames = Math.ceil(duration / frameDuration);
-            const avgFrameSize = audioDataSize / totalFrames;
-            const mdatStart = mdatBox ? mdatBox.offset + 8 : 0;
-            for (let i = 0; i < totalFrames; i++) {
-                frames.push({
-                    index: i,
-                    offset: mdatStart + Math.floor(i * avgFrameSize),
-                    length: Math.floor(avgFrameSize),
-                    duration: frameDuration,
-                    samples: samplesPerFrame,
-                    sampleRate,
-                    bitrate: Math.round(averageBitrate || 0)
-                });
-            }
-        }
-        const metadata = {
-            format: 'm4a',
-            size,
-            duration,
-            audioDataSize,
-            frames
-        };
-        if (sampleRate !== undefined) {
-            metadata.sampleRate = sampleRate;
-        }
-        if (channels !== undefined) {
-            metadata.channels = channels;
-        }
-        if (averageBitrate !== undefined) {
-            metadata.averageBitrate = averageBitrate;
-        }
-        if (warnings.length > 0) {
-            metadata.warnings = warnings;
-        }
-        metadata.metadata = {
-            container: 'mp4',
-            codec: 'aac'
-        };
-        return metadata;
-    }
     parseAdtsHeader(buffer, offset) {
         if (offset + 7 > buffer.length) {
             return null;
@@ -201,44 +123,6 @@ class AacParser {
             channels: channelConfig,
             frameLength
         };
-    }
-    parseBoxes(buffer) {
-        const boxes = [];
-        let offset = 0;
-        while (offset + 8 <= buffer.length) {
-            let size = buffer.readUInt32BE(offset);
-            const type = buffer.toString('ascii', offset + 4, offset + 8);
-            if (size === 1 && offset + 16 <= buffer.length) {
-                size = Number(buffer.readBigUInt64BE(offset + 8));
-            }
-            else if (size === 0) {
-                size = buffer.length - offset;
-            }
-            boxes.push({ type, size, offset });
-            if (size < 8 || offset + size > buffer.length) {
-                break;
-            }
-            offset += size;
-        }
-        return boxes;
-    }
-    findBoxInData(data, boxType) {
-        let offset = 0;
-        while (offset + 8 <= data.length) {
-            let size = data.readUInt32BE(offset);
-            const type = data.toString('ascii', offset + 4, offset + 8);
-            if (size === 1 && offset + 16 <= data.length) {
-                size = Number(data.readBigUInt64BE(offset + 8));
-            }
-            if (type === boxType) {
-                return { offset: offset + 8, size };
-            }
-            if (size < 8 || offset + size > data.length) {
-                break;
-            }
-            offset += size;
-        }
-        return null;
     }
 }
 exports.AacParser = AacParser;

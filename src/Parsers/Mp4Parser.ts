@@ -72,11 +72,13 @@ export class Mp4Parser implements IMediaParser {
       const o = mvhd.dataOffset;
       const version = d[o];
       if (version === 1) {
-        movieTimescale = d.readUInt32BE(o + 16);
-        movieDuration = Number(d.readBigUInt64BE(o + 20));
+        // version(1)+flags(3)+creation(8)+modification(8) = 20 bytes before timescale
+        movieTimescale = d.readUInt32BE(o + 20);
+        movieDuration = Number(d.readBigUInt64BE(o + 24));
       } else {
-        movieTimescale = d.readUInt32BE(o + 8);
-        movieDuration = d.readUInt32BE(o + 12);
+        // version(1)+flags(3)+creation(4)+modification(4) = 12 bytes before timescale
+        movieTimescale = d.readUInt32BE(o + 12);
+        movieDuration = d.readUInt32BE(o + 16);
       }
     }
     const totalDurationSeconds = movieTimescale > 0 ? movieDuration / movieTimescale : 0;
@@ -268,11 +270,13 @@ export class Mp4Parser implements IMediaParser {
       const o = mdhd.dataOffset;
       const version = mdiaData[o];
       if (version === 1) {
-        timescale = mdiaData.readUInt32BE(o + 16);
-        trackDuration = Number(mdiaData.readBigUInt64BE(o + 20));
+        // version(1)+flags(3)+creation(8)+modification(8) = 20 bytes before timescale
+        timescale = mdiaData.readUInt32BE(o + 20);
+        trackDuration = Number(mdiaData.readBigUInt64BE(o + 24));
       } else {
-        timescale = mdiaData.readUInt32BE(o + 8);
-        trackDuration = mdiaData.readUInt32BE(o + 12);
+        // version(1)+flags(3)+creation(4)+modification(4) = 12 bytes before timescale
+        timescale = mdiaData.readUInt32BE(o + 12);
+        trackDuration = mdiaData.readUInt32BE(o + 16);
       }
     }
 

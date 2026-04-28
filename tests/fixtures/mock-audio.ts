@@ -299,14 +299,14 @@ export class MockAudio {
     offset += this.writeMp4Box(buffer, offset, 'moov', (buf, off) => {
       let moovOff = off;
 
-      // mvhd box
+      // mvhd box version 0: version(1)+flags(3)+creation(4)+modification(4)+timescale(4)+duration(4)
       moovOff += this.writeMp4Box(buf, moovOff, 'mvhd', (b, o) => {
-        b[o] = 0; // Version
+        b[o] = 0; // Version 0
         b.writeUIntBE(0, o + 1, 3); // Flags
         b.writeUInt32BE(0, o + 4); // Creation time
         b.writeUInt32BE(0, o + 8); // Modification time
         b.writeUInt32BE(44100, o + 12); // Timescale
-        b.writeUInt32BE(44100, o + 16); // Duration (1 second)
+        b.writeUInt32BE(44100, o + 16); // Duration (1 second at 44100 timescale)
         return 20;
       });
 

@@ -97,6 +97,13 @@ export class Mp3Parser implements IMediaParser {
     let totalAudioBytes = 0;
 
     while (offset + 4 <= offsets.audioEnd) {
+      // Skip to next 0xFF byte instead of scanning byte-by-byte
+      if (buffer[offset] !== 0xff) {
+        const next = buffer.indexOf(0xff, offset + 1);
+        if (next === -1 || next + 4 > offsets.audioEnd) break;
+        offset = next;
+      }
+
       if (!this.isFrameSync(buffer, offset)) {
         offset++;
         continue;

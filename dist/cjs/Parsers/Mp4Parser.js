@@ -40,12 +40,12 @@ class Mp4Parser {
             const o = mvhd.dataOffset;
             const version = d[o];
             if (version === 1) {
-                movieTimescale = d.readUInt32BE(o + 16);
-                movieDuration = Number(d.readBigUInt64BE(o + 20));
+                movieTimescale = d.readUInt32BE(o + 20);
+                movieDuration = Number(d.readBigUInt64BE(o + 24));
             }
             else {
-                movieTimescale = d.readUInt32BE(o + 8);
-                movieDuration = d.readUInt32BE(o + 12);
+                movieTimescale = d.readUInt32BE(o + 12);
+                movieDuration = d.readUInt32BE(o + 16);
             }
         }
         const totalDurationSeconds = movieTimescale > 0 ? movieDuration / movieTimescale : 0;
@@ -213,12 +213,12 @@ class Mp4Parser {
             const o = mdhd.dataOffset;
             const version = mdiaData[o];
             if (version === 1) {
-                timescale = mdiaData.readUInt32BE(o + 16);
-                trackDuration = Number(mdiaData.readBigUInt64BE(o + 20));
+                timescale = mdiaData.readUInt32BE(o + 20);
+                trackDuration = Number(mdiaData.readBigUInt64BE(o + 24));
             }
             else {
-                timescale = mdiaData.readUInt32BE(o + 8);
-                trackDuration = mdiaData.readUInt32BE(o + 12);
+                timescale = mdiaData.readUInt32BE(o + 12);
+                trackDuration = mdiaData.readUInt32BE(o + 16);
             }
         }
         const hdlr = this.findBox(mdiaData, 'hdlr');

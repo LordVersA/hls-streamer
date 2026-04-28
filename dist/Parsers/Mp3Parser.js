@@ -40,6 +40,12 @@ export class Mp3Parser {
         let totalDuration = 0;
         let totalAudioBytes = 0;
         while (offset + 4 <= offsets.audioEnd) {
+            if (buffer[offset] !== 0xff) {
+                const next = buffer.indexOf(0xff, offset + 1);
+                if (next === -1 || next + 4 > offsets.audioEnd)
+                    break;
+                offset = next;
+            }
             if (!this.isFrameSync(buffer, offset)) {
                 offset++;
                 continue;
