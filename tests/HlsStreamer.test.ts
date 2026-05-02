@@ -522,6 +522,56 @@ describe('HlsStreamer', () => {
         const result = await streamer.getFileBuffer(10, 10);
         expect(result.length).toBe(0);
       });
+
+      it('should not call getBuffer when serving a range request', async () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const streamer = new HlsStreamer({ storageProvider: provider });
+        provider.resetCallCounts();
+
+        await streamer.getFileBuffer(0, 256);
+
+        expect(provider.getBufferCalls).toBe(0);
+        expect(provider.getRangeCalls).toBe(1);
+      });
+
+      it('should cache file size across multiple range requests', async () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const streamer = new HlsStreamer({ storageProvider: provider });
+        provider.resetCallCounts();
+
+        await streamer.getFileBuffer(0, 256);
+        await streamer.getFileBuffer(256, 512);
+        await streamer.getFileBuffer(512, 1024);
+
+        expect(provider.getSizeCalls).toBe(1);
+        expect(provider.getRangeCalls).toBe(3);
+        expect(provider.getBufferCalls).toBe(0);
+      });
+
+      it('should reuse fileInfo.size when fileInfo is already cached', async () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const streamer = new HlsStreamer({ storageProvider: provider });
+        await streamer.createM3U8();
+        provider.resetCallCounts();
+
+        await streamer.getFileBuffer(0, 256);
+
+        expect(provider.getSizeCalls).toBe(0);
+        expect(provider.getBufferCalls).toBe(0);
+        expect(provider.getRangeCalls).toBe(1);
+      });
+
+      it('should still validate range against file size without parsing', async () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const streamer = new HlsStreamer({ storageProvider: provider });
+        provider.resetCallCounts();
+
+        await expect(
+          streamer.getFileBuffer(0, mp3Buffer.length + 1)
+        ).rejects.toThrow(InvalidRangeError);
+
+        expect(provider.getBufferCalls).toBe(0);
+      });
     });
 
     describe('getSegmentDuration', () => {
@@ -545,6 +595,207 @@ describe('HlsStreamer', () => {
         const streamer = new HlsStreamer({ storageProvider: provider });
         const type = await streamer.getMediaType();
         expect(type).toBe('audio');
+      });
+
+      it('should not trigger a full file read when format is detectable from header', async () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const streamer = new HlsStreamer({ storageProvider: provider });
+        provider.resetCallCounts();
+
+        await streamer.getMediaType();
+
+        expect(provider.getBufferCalls).toBe(0);
+        expect(provider.getHeaderCalls).toBeGreaterThan(0);
+      });
+
+      it('should not trigger any read when fileInfo is already cached', async () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const streamer = new HlsStreamer({ storageProvider: provider });
+        await streamer.createM3U8();
+        provider.resetCallCounts();
+
+        const type = await streamer.getMediaType();
+
+        expect(type).toBe('audio');
+        expect(provider.getBufferCalls).toBe(0);
+        expect(provider.getHeaderCalls).toBe(0);
+        expect(provider.getRangeCalls).toBe(0);
+      });
+
+      it('should classify directly from format override without reading the file', async () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const streamer = new HlsStreamer({ storageProvider: provider, format: 'mp4' });
+        provider.resetCallCounts();
+
+        const type = await streamer.getMediaType();
+
+        expect(type).toBe('video');
+        expect(provider.getBufferCalls).toBe(0);
+        expect(provider.getHeaderCalls).toBe(0);
+        expect(provider.getRangeCalls).toBe(0);
+      });
+
+      it('should fall back to full analysis when header magic bytes are inconclusive', async () => {
+        // Stub getHeader to return zeros so FormatDetector returns null,
+        // forcing the fallback to getFileInfo() via the real buffer.
+        const provider = new MockStorageProvider(mp3Buffer);
+        provider.getHeader = async () => {
+          provider.getHeaderCalls++;
+          return Buffer.alloc(64, 0x00);
+        };
+        const streamer = new HlsStreamer({ storageProvider: provider });
+        provider.resetCallCounts();
+
+        const type = await streamer.getMediaType();
+
+        expect(type).toBe('audio');
+        expect(provider.getHeaderCalls).toBeGreaterThan(0);
+        expect(provider.getBufferCalls).toBeGreaterThan(0);
+      });
+    });
+
+    describe('getFileInfo / restoreFileInfo', () => {
+      it('should expose getFileInfo as a public method returning parsed metadata', async () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const streamer = new HlsStreamer({ storageProvider: provider });
+
+        const info = await streamer.getFileInfo();
+
+        expect(info).toBeDefined();
+        expect(info.format).toBe('mp3');
+        expect(info.size).toBe(mp3Buffer.length);
+        expect(Array.isArray(info.frames)).toBe(true);
+      });
+
+      it('should cache getFileInfo result across calls', async () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const streamer = new HlsStreamer({ storageProvider: provider });
+
+        const first = await streamer.getFileInfo();
+        provider.resetCallCounts();
+        const second = await streamer.getFileInfo();
+
+        expect(second).toBe(first);
+        expect(provider.getBufferCalls).toBe(0);
+        expect(provider.getSizeCalls).toBe(0);
+      });
+
+      it('should skip parsing entirely when restoreFileInfo is called first', async () => {
+        const sourceProvider = new MockStorageProvider(mp3Buffer);
+        const sourceStreamer = new HlsStreamer({ storageProvider: sourceProvider });
+        const cachedInfo = await sourceStreamer.getFileInfo();
+
+        const freshProvider = new MockStorageProvider(mp3Buffer);
+        const freshStreamer = new HlsStreamer({ storageProvider: freshProvider });
+        freshStreamer.restoreFileInfo(cachedInfo);
+        freshProvider.resetCallCounts();
+
+        const info = await freshStreamer.getFileInfo();
+
+        expect(info).toBe(cachedInfo);
+        expect(freshProvider.getBufferCalls).toBe(0);
+        expect(freshProvider.getSizeCalls).toBe(0);
+      });
+
+      it('should allow getFileBuffer without any parse calls after restoreFileInfo', async () => {
+        const sourceProvider = new MockStorageProvider(mp3Buffer);
+        const sourceStreamer = new HlsStreamer({ storageProvider: sourceProvider });
+        const cachedInfo = await sourceStreamer.getFileInfo();
+
+        const freshProvider = new MockStorageProvider(mp3Buffer);
+        const freshStreamer = new HlsStreamer({ storageProvider: freshProvider });
+        freshStreamer.restoreFileInfo(cachedInfo);
+        freshProvider.resetCallCounts();
+
+        await freshStreamer.getFileBuffer(0, 256);
+
+        expect(freshProvider.getBufferCalls).toBe(0);
+        expect(freshProvider.getSizeCalls).toBe(0);
+        expect(freshProvider.getRangeCalls).toBe(1);
+      });
+
+      it('should produce an identical M3U8 playlist to a fresh parse after restoreFileInfo', async () => {
+        const sourceProvider = new MockStorageProvider(mp3Buffer);
+        const sourceStreamer = new HlsStreamer({
+          storageProvider: sourceProvider,
+          segmentSizeKB: 32,
+          fileName: 'sample',
+          baseUrl: 'cdn',
+        });
+        const referencePlaylist = await sourceStreamer.createM3U8();
+        const cachedInfo = await sourceStreamer.getFileInfo();
+
+        const freshProvider = new MockStorageProvider(mp3Buffer);
+        const freshStreamer = new HlsStreamer({
+          storageProvider: freshProvider,
+          segmentSizeKB: 32,
+          fileName: 'sample',
+          baseUrl: 'cdn',
+        });
+        freshStreamer.restoreFileInfo(cachedInfo);
+        freshProvider.resetCallCounts();
+
+        const restoredPlaylist = await freshStreamer.createM3U8();
+
+        expect(restoredPlaylist).toBe(referencePlaylist);
+        expect(freshProvider.getBufferCalls).toBe(0);
+        expect(freshProvider.getSizeCalls).toBe(0);
+      });
+
+      it('should return correct media type after restoreFileInfo without any read', async () => {
+        const sourceProvider = new MockStorageProvider(mp3Buffer);
+        const sourceStreamer = new HlsStreamer({ storageProvider: sourceProvider });
+        const cachedInfo = await sourceStreamer.getFileInfo();
+
+        const freshProvider = new MockStorageProvider(mp3Buffer);
+        const freshStreamer = new HlsStreamer({ storageProvider: freshProvider });
+        freshStreamer.restoreFileInfo(cachedInfo);
+        freshProvider.resetCallCounts();
+
+        const type = await freshStreamer.getMediaType();
+
+        expect(type).toBe('audio');
+        expect(freshProvider.getBufferCalls).toBe(0);
+        expect(freshProvider.getHeaderCalls).toBe(0);
+        expect(freshProvider.getRangeCalls).toBe(0);
+        expect(freshProvider.getSizeCalls).toBe(0);
+      });
+
+      it('should reject restoreFileInfo with invalid input', () => {
+        const provider = new MockStorageProvider(mp3Buffer);
+        const streamer = new HlsStreamer({ storageProvider: provider });
+
+        expect(() => streamer.restoreFileInfo(null as any)).toThrow(InvalidParameterError);
+        expect(() => streamer.restoreFileInfo(undefined as any)).toThrow(InvalidParameterError);
+        expect(() => streamer.restoreFileInfo({ size: 0 } as any)).toThrow(InvalidParameterError);
+        expect(() => streamer.restoreFileInfo({ size: -1 } as any)).toThrow(InvalidParameterError);
+      });
+
+      it('should support round-trip via JSON serialization', async () => {
+        const sourceProvider = new MockStorageProvider(mp3Buffer);
+        const sourceStreamer = new HlsStreamer({
+          storageProvider: sourceProvider,
+          segmentSizeKB: 64,
+        });
+        const referencePlaylist = await sourceStreamer.createM3U8();
+        const cachedInfo = await sourceStreamer.getFileInfo();
+
+        // Simulate persistence: serialize and rehydrate.
+        const serialized = JSON.stringify(cachedInfo);
+        const rehydrated = JSON.parse(serialized);
+
+        const freshProvider = new MockStorageProvider(mp3Buffer);
+        const freshStreamer = new HlsStreamer({
+          storageProvider: freshProvider,
+          segmentSizeKB: 64,
+        });
+        freshStreamer.restoreFileInfo(rehydrated);
+        freshProvider.resetCallCounts();
+
+        const playlist = await freshStreamer.createM3U8();
+
+        expect(playlist).toBe(referencePlaylist);
+        expect(freshProvider.getBufferCalls).toBe(0);
       });
     });
   });

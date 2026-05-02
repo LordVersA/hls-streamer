@@ -1,4 +1,4 @@
-import { HlsStreamerOptions } from "./Interfaces/HlsStreamer";
+import { HlsStreamerOptions, MediaFileInfo } from "./Interfaces/HlsStreamer";
 export declare class HlsStreamer {
     private readonly provider;
     private readonly segmentSize;
@@ -8,11 +8,14 @@ export declare class HlsStreamer {
     private readonly formatOverride;
     private fileInfo?;
     private segments;
+    private cachedSize?;
     constructor(options: HlsStreamerOptions);
     private validateOptions;
     private validateFormat;
-    private getFileInfo;
+    getFileInfo(): Promise<MediaFileInfo>;
+    restoreFileInfo(fileInfo: MediaFileInfo): void;
     getFileBuffer(startByte: number, endByte: number): Promise<Buffer>;
+    private getFileSize;
     createM3U8(): Promise<string>;
     private getSegments;
     private computeTargetSizes;
@@ -23,6 +26,7 @@ export declare class HlsStreamer {
     private calculateSegmentSize;
     private padNumber;
     getMediaType(): Promise<'audio' | 'video'>;
+    private classifyMediaType;
     getSegmentDuration(segmentIndex: number): Promise<number>;
 }
 export * from './Interfaces/HlsStreamer';

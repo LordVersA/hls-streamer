@@ -335,9 +335,11 @@ Provide either `filePath` **or** `storageProvider` — not both.
 ### API Surface
 
 - `createM3U8(): Promise<string>` – Full HLS playlist with frame-accurate durations. Audio → HLS v6; Video → HLS v7 + `EXT-X-MAP`.
-- `getFileBuffer(start: number, end: number): Promise<Buffer>` – Byte-range read from the source file (used for both segments and the init segment).
+- `getFileBuffer(start: number, end: number): Promise<Buffer>` – Byte-range read from the source file (used for both segments and the init segment). Validates the range against file size only — does not trigger a full parse.
 - `getSegmentDuration(index: number): Promise<number>` – Duration in seconds for a specific segment.
-- `getMediaType(): Promise<'audio' | 'video'>` – Returns `'video'` for MP4/MOV/M4V, `'audio'` for everything else.
+- `getMediaType(): Promise<'audio' | 'video'>` – Returns `'video'` for MP4/MOV/M4V, `'audio'` for everything else. Reads only the file header (~64 bytes) when possible.
+- `getFileInfo(): Promise<MediaFileInfo>` – Parsed metadata (size, duration, frame table, etc.). Cached on the instance.
+- `restoreFileInfo(fileInfo: MediaFileInfo): void` – Hydrate a previously-parsed `MediaFileInfo` into a fresh instance, skipping the underlying parse. Pair with an external metadata cache (LRU, Redis) to avoid re-downloading + re-parsing the same file across short-lived instances. Safe to round-trip via `JSON.stringify` / `JSON.parse`.
 
 Custom error classes: `FileNotFoundError`, `InvalidFileError`, `InvalidRangeError`, `InvalidParameterError`, `UnsupportedFormatError`, `StorageProviderError`.
 
@@ -397,6 +399,19 @@ Custom error classes: `FileNotFoundError`, `InvalidFileError`, `InvalidRangeErro
 ## Operational Tips
 
 - **Caching** – Construct the streamer once per unique file and reuse it. Segment planning caches metadata after the first call.
+- **External metadata cache** – If you cannot keep `HlsStreamer` instances alive between requests (e.g. serverless, multi-process workers), use `getFileInfo()` to capture the parsed `MediaFileInfo` once and `restoreFileInfo()` to hydrate fresh instances on subsequent requests. Subsequent calls to `createM3U8()`, `getMediaType()`, and `getFileBuffer()` then issue zero parse-related reads against your storage backend:
+
+  ```ts
+  const cached = lruCache.get(s3Key); // your cache
+  const streamer = new HlsStreamer({ storageProvider: new S3Provider({ bucket, key: s3Key, client: s3 }) });
+  if (cached) {
+    streamer.restoreFileInfo(cached);
+  } else {
+    lruCache.set(s3Key, await streamer.getFileInfo());
+  }
+  // From here, segment requests do one ranged GET, nothing more.
+  ```
+
 - **Video segment size** – Use a larger `segmentSizeKB` (1024–4096) for video to avoid excessive HTTP requests. Audio works well at 512.
 - **CDN friendliness** – Segment URLs are deterministic byte ranges, making them ideal for edge caching. Use `Cache-Control: public, max-age=86400`.
 - **Serverless** – Zero-dependency design works in Lambda/Cloud Functions. `getFileBuffer` reads only the bytes needed, keeping memory usage low.
@@ -432,6 +447,28 @@ Contributions are welcome! Please open an issue to discuss substantial changes b
 ---
 
 ## Release Notes
+
+For the complete history, see [CHANGELOG.md](./CHANGELOG.md).
+
+### Version 4.6.0
+
+#### New Features
+
+- **`HlsStreamer.getFileInfo()`** is now public — returns the parsed `MediaFileInfo` (size, duration, frame table, etc.). Result is cached on the instance.
+- **`HlsStreamer.restoreFileInfo(fileInfo)`** hydrates a previously-parsed `MediaFileInfo` into a fresh instance, skipping the underlying parse. Designed to pair with an external cache (LRU, Redis) so short-lived instances avoid redundant downloads + re-parsing of the same file. Round-trips cleanly through `JSON.stringify` / `JSON.parse`.
+
+#### Performance
+
+- **`getMediaType()`** no longer triggers a full file read in the common path. It now reads only the file header (~64 bytes) and classifies via magic bytes; falls back to a full parse only when the header is inconclusive. With a `format` override, classification happens with no read at all.
+- **`getFileBuffer()`** no longer triggers a full file parse. It validates the requested range using only `provider.getSize()` (a HEAD-equivalent), then issues the ranged read. The size is memoized on the instance — repeated segment requests against the same `HlsStreamer` issue exactly one `getSize()` call regardless of how many ranges are fetched.
+
+#### Migration
+
+Fully backward compatible — no signatures or behaviors changed. All additions are additive.
+
+Full details: [CHANGELOG.md](./CHANGELOG.md#460---2026-05-02).
+
+---
 
 ### Version 4.5.0
 

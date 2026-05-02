@@ -52,6 +52,12 @@ export class HlsStreamer {
             writable: true,
             value: void 0
         });
+        Object.defineProperty(this, "cachedSize", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: void 0
+        });
         this.validateOptions(options);
         if (options.storageProvider) {
             this.provider = options.storageProvider;
@@ -128,19 +134,42 @@ export class HlsStreamer {
                 throw new InvalidFileError('File is empty');
             }
             this.fileInfo = analysis;
+            this.cachedSize = analysis.size;
             this.segments = undefined;
         }
         return this.fileInfo;
+    }
+    restoreFileInfo(fileInfo) {
+        if (!fileInfo || typeof fileInfo !== 'object') {
+            throw new InvalidParameterError('fileInfo', fileInfo);
+        }
+        if (!Number.isFinite(fileInfo.size) || fileInfo.size <= 0) {
+            throw new InvalidParameterError('fileInfo.size', fileInfo.size);
+        }
+        this.fileInfo = fileInfo;
+        this.cachedSize = fileInfo.size;
+        this.segments = undefined;
     }
     async getFileBuffer(startByte, endByte) {
         if (isNaN(startByte) || isNaN(endByte) || startByte < 0 || endByte < startByte) {
             throw new InvalidRangeError(startByte, endByte);
         }
-        const fileInfo = await this.getFileInfo();
-        if (endByte > fileInfo.size) {
+        const size = await this.getFileSize();
+        if (endByte > size) {
             throw new InvalidRangeError(startByte, endByte);
         }
         return this.provider.getRange(startByte, endByte);
+    }
+    async getFileSize() {
+        if (this.fileInfo) {
+            return this.fileInfo.size;
+        }
+        if (this.cachedSize !== undefined) {
+            return this.cachedSize;
+        }
+        const size = await this.provider.getSize();
+        this.cachedSize = size;
+        return size;
     }
     async createM3U8() {
         const [fileInfo, segments] = await Promise.all([
@@ -311,9 +340,23 @@ export class HlsStreamer {
         return value.toString().padStart(padding, '0');
     }
     async getMediaType() {
+        if (this.fileInfo) {
+            return this.classifyMediaType(this.fileInfo.format);
+        }
+        if (this.formatOverride) {
+            return this.classifyMediaType(this.formatOverride);
+        }
+        const header = await this.provider.getHeader();
+        const detected = FormatDetector.detectFormat(header);
+        if (detected) {
+            return this.classifyMediaType(detected);
+        }
         const fileInfo = await this.getFileInfo();
+        return this.classifyMediaType(fileInfo.format);
+    }
+    classifyMediaType(format) {
         const videoFormats = ['mp4', 'mov', 'm4v'];
-        return videoFormats.includes(fileInfo.format) ? 'video' : 'audio';
+        return videoFormats.includes(format) ? 'video' : 'audio';
     }
     async getSegmentDuration(segmentIndex) {
         if (!Number.isInteger(segmentIndex) || segmentIndex < 0) {

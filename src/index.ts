@@ -23,6 +23,7 @@ export class HlsStreamer {
   private readonly formatOverride: string | undefined;
   private fileInfo?: MediaFileInfo;
   private segments: SegmentInfo[] | undefined;
+  private cachedSize?: number;
 
   constructor(options: HlsStreamerOptions) {
     this.validateOptions(options);
@@ -87,7 +88,15 @@ export class HlsStreamer {
     }
   }
 
-  private async getFileInfo(): Promise<MediaFileInfo> {
+  /**
+   * Returns the parsed media metadata (size, duration, frame table, etc.).
+   *
+   * Result is cached on the instance — subsequent calls return the same
+   * object without re-reading the underlying file. Pair with
+   * {@link restoreFileInfo} to share parsed metadata across instances and
+   * skip redundant parsing entirely (e.g. behind an external LRU cache).
+   */
+  async getFileInfo(): Promise<MediaFileInfo> {
     if (!this.fileInfo) {
       const [buffer, size] = await Promise.all([
         this.provider.getBuffer(),
@@ -109,6 +118,7 @@ export class HlsStreamer {
       }
 
       this.fileInfo = analysis;
+      this.cachedSize = analysis.size;
       this.segments = undefined;
     }
 
@@ -116,19 +126,58 @@ export class HlsStreamer {
   }
 
   /**
-   * Read file bytes within specified range
+   * Hydrate previously-parsed metadata into this instance, skipping the
+   * underlying parse on subsequent calls.
+   *
+   * The caller is responsible for ensuring `fileInfo` matches the file the
+   * provider points to — no validation is performed here. Intended for
+   * consumers that maintain their own metadata cache (LRU, Redis, etc.)
+   * and want to avoid re-downloading + re-parsing the same file across
+   * many short-lived `HlsStreamer` instances.
+   */
+  restoreFileInfo(fileInfo: MediaFileInfo): void {
+    if (!fileInfo || typeof fileInfo !== 'object') {
+      throw new InvalidParameterError('fileInfo', fileInfo);
+    }
+    if (!Number.isFinite(fileInfo.size) || fileInfo.size <= 0) {
+      throw new InvalidParameterError('fileInfo.size', fileInfo.size);
+    }
+    this.fileInfo = fileInfo;
+    this.cachedSize = fileInfo.size;
+    this.segments = undefined;
+  }
+
+  /**
+   * Read file bytes within specified range.
+   *
+   * Validates the range against the file size only — does not trigger
+   * a full file parse. The first call resolves the size via
+   * `provider.getSize()` (or reuses an already-cached `fileInfo.size`)
+   * and memoizes it on the instance.
    */
   async getFileBuffer(startByte: number, endByte: number): Promise<Buffer> {
     if (isNaN(startByte) || isNaN(endByte) || startByte < 0 || endByte < startByte) {
       throw new InvalidRangeError(startByte, endByte);
     }
 
-    const fileInfo = await this.getFileInfo();
-    if (endByte > fileInfo.size) {
+    const size = await this.getFileSize();
+    if (endByte > size) {
       throw new InvalidRangeError(startByte, endByte);
     }
 
     return this.provider.getRange(startByte, endByte);
+  }
+
+  private async getFileSize(): Promise<number> {
+    if (this.fileInfo) {
+      return this.fileInfo.size;
+    }
+    if (this.cachedSize !== undefined) {
+      return this.cachedSize;
+    }
+    const size = await this.provider.getSize();
+    this.cachedSize = size;
+    return size;
   }
 
   /**
@@ -349,11 +398,35 @@ export class HlsStreamer {
 
   /**
    * Returns 'video' for MP4/MOV/M4V files, 'audio' for all other formats.
+   *
+   * This method avoids a full file read when possible:
+   * 1. If `fileInfo` is already cached, classify from it.
+   * 2. If a `format` override was supplied at construction, classify from that.
+   * 3. Otherwise read only the file header (~64 bytes) and detect via magic bytes.
+   * 4. Fall back to full `getFileInfo()` only when the header is inconclusive.
    */
   async getMediaType(): Promise<'audio' | 'video'> {
+    if (this.fileInfo) {
+      return this.classifyMediaType(this.fileInfo.format);
+    }
+
+    if (this.formatOverride) {
+      return this.classifyMediaType(this.formatOverride);
+    }
+
+    const header = await this.provider.getHeader();
+    const detected = FormatDetector.detectFormat(header);
+    if (detected) {
+      return this.classifyMediaType(detected);
+    }
+
     const fileInfo = await this.getFileInfo();
+    return this.classifyMediaType(fileInfo.format);
+  }
+
+  private classifyMediaType(format: string): 'audio' | 'video' {
     const videoFormats: string[] = ['mp4', 'mov', 'm4v'];
-    return videoFormats.includes(fileInfo.format) ? 'video' : 'audio';
+    return videoFormats.includes(format) ? 'video' : 'audio';
   }
 
   /**
