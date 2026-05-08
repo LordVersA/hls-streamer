@@ -311,6 +311,25 @@ describe('HlsStreamer', () => {
       expect(fastStart.segments.length).toBeGreaterThanOrEqual(baseline.segments.length);
       expect(fastStart.durations[0]).toBeLessThanOrEqual(baseline.durations[0]);
     });
+
+    it('should start at the first verified audio frame when ID3v2 size is overstated', async () => {
+      const { buffer, audioOffset } = MockMP3.createMockMP3WithOverstatedId3Buffer();
+      const provider = new MockStorageProvider(buffer);
+      const streamer = new HlsStreamer({
+        storageProvider: provider,
+        segmentSizeKB: 1,
+        fileName: 'test'
+      });
+
+      const m3u8 = await streamer.createM3U8();
+      const parsed = parseM3U8(m3u8);
+      const firstSegment = parsed.segments[0]!;
+
+      expect(firstSegment.start).toBe(audioOffset);
+
+      const firstSegmentBuffer = await streamer.getFileBuffer(firstSegment.start, firstSegment.end);
+      expect(firstSegmentBuffer.subarray(0, 4)).toEqual(Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    });
   });
 
   describe('getSegmentDuration', () => {

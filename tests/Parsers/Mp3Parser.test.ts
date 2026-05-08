@@ -1,4 +1,5 @@
 import { Mp3Parser } from '../../src/Parsers/Mp3Parser';
+import { MockMP3 } from '../fixtures/mock-mp3';
 
 describe('Mp3Parser', () => {
   let parser: Mp3Parser;
@@ -108,6 +109,16 @@ describe('Mp3Parser', () => {
         expect(result.metadata!['id3v2Size']).toBe(100);
         expect(result.frames[0].offset).toBe(110);
       }
+    });
+
+    it('should recover the first audio frame when ID3v2 size overlaps audio data', () => {
+      const { buffer, audioOffset } = MockMP3.createMockMP3WithOverstatedId3Buffer();
+
+      const result = parser.analyze(buffer);
+
+      expect(result.frames.length).toBeGreaterThan(0);
+      expect(result.frames[0]!.offset).toBe(audioOffset);
+      expect(result.warnings?.some(w => w.includes('ID3v2 tag size appears to overlap audio'))).toBe(true);
     });
 
     it('should parse MP3 with ID3v1 tag at end', () => {

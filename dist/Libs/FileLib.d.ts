@@ -1,8 +1,6 @@
 import { Mp3FileInfo, MediaFileInfo } from '../Interfaces/HlsStreamer';
 import { MediaFormat } from '../Parsers/IMediaParser';
 export declare class FileLib {
-    private static readonly BITRATE_INDEX;
-    private static readonly SAMPLE_RATE_INDEX;
     static getFileSizeInBytes(buffer: Buffer): number;
     static getMP3DurationFromBuffer(mp3Buffer: Buffer): Promise<number>;
     static analyzeMP3Buffer(buffer: Buffer, opts?: {
@@ -21,13 +19,5 @@ export declare class FileLib {
         filePath?: string;
         format?: MediaFormat;
     }): MediaFileInfo;
-    private static calculateFrameLength;
-    private static getId3Offsets;
-    private static syncSafeInteger;
-    private static isFrameSync;
-    private static parseFrameHeader;
-    private static decodeVersion;
-    private static decodeLayer;
-    private static getSamplesPerFrame;
 }
 //# sourceMappingURL=FileLib.d.ts.map

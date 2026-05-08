@@ -2,6 +2,7 @@ import { IMediaParser, MediaFileInfo, MediaFrameInfo, MediaFormat } from './IMed
 
 interface Id3Offsets {
   startOffset: number;
+  scanStartOffset: number;
   id3v2Size: number;
   audioEnd: number;
   id3v1Size: number;
@@ -16,11 +17,18 @@ interface ParsedFrameHeader {
   samplesPerFrame: number;
 }
 
+interface FrameCandidate {
+  header: ParsedFrameHeader;
+  length: number;
+}
+
 /**
  * MP3 format parser with zero dependencies
  * Parses ID3 tags, MPEG frame headers, and builds accurate frame table
  */
 export class Mp3Parser implements IMediaParser {
+  private static readonly MIN_CONSECUTIVE_AUDIO_FRAMES = 3;
+
   private static readonly BITRATE_INDEX: Record<1 | 2 | 25, Record<1 | 2 | 3, number[]>> = {
     1: {
       1: [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
@@ -87,9 +95,17 @@ export class Mp3Parser implements IMediaParser {
 
     const offsets = this.getId3Offsets(buffer);
     const frames: MediaFrameInfo[] = [];
-    const payloadSize = Math.max(0, offsets.audioEnd - offsets.startOffset);
+    const firstFrameOffset = this.findFirstFrameOffset(buffer, offsets.scanStartOffset, offsets.audioEnd);
+    const audioStartOffset = firstFrameOffset ?? offsets.startOffset;
+    const payloadSize = Math.max(0, offsets.audioEnd - audioStartOffset);
 
-    let offset = offsets.startOffset;
+    if (firstFrameOffset !== null && firstFrameOffset < offsets.startOffset) {
+      warnings.push(
+        `ID3v2 tag size appears to overlap audio; using first verified MP3 frame at offset ${firstFrameOffset}`
+      );
+    }
+
+    let offset = audioStartOffset;
     let frameIndex = 0;
     let sampleRate: number | undefined;
     let channels: number | undefined;
@@ -226,12 +242,33 @@ export class Mp3Parser implements IMediaParser {
 
   private getId3Offsets(buffer: Buffer): Id3Offsets {
     let startOffset = 0;
+    let scanStartOffset = 0;
     let id3v2Size = 0;
 
-    if (buffer.length >= 10 && buffer.toString('ascii', 0, 3) === 'ID3') {
-      const sizeBytes = buffer.subarray(6, 10);
-      id3v2Size = this.syncSafeInteger(sizeBytes);
-      startOffset = Math.min(buffer.length, 10 + id3v2Size);
+    if (this.hasId3v2Magic(buffer, 0)) {
+      scanStartOffset = Math.min(buffer.length, 10);
+      let offset = 0;
+
+      while (offset < buffer.length && this.hasId3v2Magic(buffer, offset)) {
+        const tag = this.parseId3v2Tag(buffer, offset);
+        if (!tag) {
+          break;
+        }
+
+        id3v2Size += tag.payloadSize;
+        const nextOffset = Math.min(buffer.length, offset + tag.totalSize);
+
+        if (nextOffset <= offset) {
+          break;
+        }
+
+        offset = nextOffset;
+        startOffset = offset;
+      }
+
+      if (startOffset === 0) {
+        startOffset = scanStartOffset;
+      }
     }
 
     // Detect ID3v1 tag at end (128 bytes starting with 'TAG')
@@ -248,9 +285,45 @@ export class Mp3Parser implements IMediaParser {
 
     return {
       startOffset,
+      scanStartOffset,
       id3v2Size,
       audioEnd,
       id3v1Size
+    };
+  }
+
+  private hasId3v2Magic(buffer: Buffer, offset: number): boolean {
+    return offset + 10 <= buffer.length && buffer.toString('ascii', offset, offset + 3) === 'ID3';
+  }
+
+  private parseId3v2Tag(buffer: Buffer, offset: number): { payloadSize: number; totalSize: number } | null {
+    if (!this.hasId3v2Magic(buffer, offset)) {
+      return null;
+    }
+
+    const majorVersion = buffer[offset + 3];
+    const revision = buffer[offset + 4];
+    const flags = buffer[offset + 5];
+    const sizeBytes = buffer.subarray(offset + 6, offset + 10);
+
+    if (
+      majorVersion === undefined ||
+      revision === undefined ||
+      flags === undefined ||
+      majorVersion < 2 ||
+      majorVersion > 4 ||
+      revision === 0xff ||
+      !this.isSyncSafeInteger(sizeBytes)
+    ) {
+      return null;
+    }
+
+    const payloadSize = this.syncSafeInteger(sizeBytes);
+    const footerSize = majorVersion === 4 && (flags & 0x10) !== 0 ? 10 : 0;
+
+    return {
+      payloadSize,
+      totalSize: 10 + payloadSize + footerSize
     };
   }
 
@@ -259,6 +332,96 @@ export class Mp3Parser implements IMediaParser {
            ((bytes[1]! & 0x7f) << 14) |
            ((bytes[2]! & 0x7f) << 7) |
            (bytes[3]! & 0x7f);
+  }
+
+  private isSyncSafeInteger(bytes: Buffer): boolean {
+    return bytes.length === 4 && bytes.every((byte) => (byte & 0x80) === 0);
+  }
+
+  private findFirstFrameOffset(buffer: Buffer, startOffset: number, audioEnd: number): number | null {
+    let offset = Math.max(0, Math.min(startOffset, audioEnd));
+    let fallbackOffset: number | null = null;
+
+    while (offset + 4 <= audioEnd) {
+      if (buffer[offset] !== 0xff) {
+        const next = buffer.indexOf(0xff, offset + 1);
+        if (next === -1 || next + 4 > audioEnd) {
+          break;
+        }
+        offset = next;
+      }
+
+      const candidate = this.getFrameCandidate(buffer, offset, audioEnd);
+      if (!candidate) {
+        offset++;
+        continue;
+      }
+
+      fallbackOffset = fallbackOffset ?? offset;
+
+      if (
+        this.countConsecutiveFrames(buffer, offset, audioEnd) >=
+        Mp3Parser.MIN_CONSECUTIVE_AUDIO_FRAMES
+      ) {
+        return offset;
+      }
+
+      offset++;
+    }
+
+    return fallbackOffset;
+  }
+
+  private getFrameCandidate(buffer: Buffer, offset: number, audioEnd: number): FrameCandidate | null {
+    if (offset + 4 > audioEnd || !this.isFrameSync(buffer, offset)) {
+      return null;
+    }
+
+    const header = this.parseFrameHeader(buffer.readUInt32BE(offset));
+    if (!header) {
+      return null;
+    }
+
+    const length = this.calculateFrameLength(header);
+    if (length <= 0) {
+      return null;
+    }
+
+    return { header, length };
+  }
+
+  private countConsecutiveFrames(buffer: Buffer, offset: number, audioEnd: number): number {
+    let count = 0;
+    let cursor = offset;
+    let firstHeader: ParsedFrameHeader | undefined;
+
+    while (count < Mp3Parser.MIN_CONSECUTIVE_AUDIO_FRAMES) {
+      const candidate = this.getFrameCandidate(buffer, cursor, audioEnd);
+      if (!candidate) {
+        break;
+      }
+
+      if (firstHeader && !this.isCompatibleFrame(firstHeader, candidate.header)) {
+        break;
+      }
+
+      firstHeader = firstHeader ?? candidate.header;
+      count++;
+
+      if (cursor + candidate.length > audioEnd || cursor + candidate.length > buffer.length) {
+        break;
+      }
+
+      cursor += candidate.length;
+    }
+
+    return count;
+  }
+
+  private isCompatibleFrame(first: ParsedFrameHeader, next: ParsedFrameHeader): boolean {
+    return first.version === next.version &&
+      first.layer === next.layer &&
+      first.sampleRate === next.sampleRate;
   }
 
   private isFrameSync(buffer: Buffer, offset: number): boolean {
