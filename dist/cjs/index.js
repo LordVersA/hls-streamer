@@ -228,10 +228,10 @@ class HlsStreamer {
             this.segments = this.buildSegmentsWithoutFrameTable(fileInfo);
             return this.segments;
         }
-        const targetSizes = this.computeTargetSizes(fileInfo);
         const segments = [];
         const frames = fileInfo.frames;
         let frameCursor = 0;
+        let segmentIndex = 0;
         const consumeFrames = (targetBytes) => {
             if (frameCursor >= frames.length) {
                 return;
@@ -273,9 +273,8 @@ class HlsStreamer {
                 duration
             });
         };
-        targetSizes.forEach(consumeFrames);
         while (frameCursor < frames.length) {
-            consumeFrames(this.segmentSize);
+            consumeFrames(this.calculateSegmentSize(segmentIndex++));
         }
         if (!segments.length) {
             this.segments = this.buildSegmentsWithoutFrameTable(fileInfo);
@@ -284,10 +283,6 @@ class HlsStreamer {
             this.segments = segments;
         }
         return this.segments;
-    }
-    computeTargetSizes(fileInfo) {
-        const totalBytes = fileInfo.audioDataSize || fileInfo.size;
-        return this.computeTargetSizesFromBytes(totalBytes);
     }
     computeTargetSizesFromBytes(totalBytes) {
         if (totalBytes <= 0) {

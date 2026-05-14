@@ -18,7 +18,6 @@ export declare class HlsStreamer {
     private getFileSize;
     createM3U8(): Promise<string>;
     private getSegments;
-    private computeTargetSizes;
     private computeTargetSizesFromBytes;
     private buildSegmentsWithoutFrameTable;
     private estimateSegmentDuration;
